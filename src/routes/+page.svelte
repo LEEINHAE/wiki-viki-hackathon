@@ -1,7 +1,7 @@
 <script>
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import StatusNotice from '$lib/components/StatusNotice.svelte';
-	import { documentHref, formatDate } from '$lib/knowledge.js';
+	import { documentHref, knowledgeMapHref, formatDate } from '$lib/knowledge.js';
 	import SearchBox from '$lib/components/SearchBox.svelte';
 	import AnswerCard from '$lib/components/AnswerCard.svelte';
 	import KnowledgeMap from '$lib/components/KnowledgeMap.svelte';
@@ -358,10 +358,11 @@
 				</div>
 			{:else}
 				<div class="content-grid map-grid">
-					<section class="panel map-panel">
+					<section class="panel map-panel" id="knowledge-map" aria-label="지식 지도 탐색">
 						<h2>지식은 연결될수록 커집니다</h2>
 						<p class="small muted">
-							연결이 많은 문서와 이웃 문서입니다. 노드를 눌러 따라가 보세요.
+							주변 항목을 누르면 그 문서를 중심으로 연결을 다시 보여 줍니다. 가운데 항목을 누르면
+							문서가 열립니다.
 						</p>
 						<KnowledgeMap graph={data.graph} />
 						<div class="map-legend">
@@ -372,7 +373,9 @@
 						<section class="panel">
 							<h2>연결이 가장 많은 문서</h2>
 							{#each data.hubs as doc}<div class="hub-row">
-									<a href={documentHref(doc.slug)}>{doc.title}</a>
+									<a href={knowledgeMapHref(doc.slug)} title={`${doc.title} 중심으로 연결 보기`}
+										>{doc.title}</a
+									>
 									<div class="hub-track">
 										<span
 											style={`width:${data.hubs[0].links ? (doc.links / data.hubs[0].links) * 100 : 0}%`}

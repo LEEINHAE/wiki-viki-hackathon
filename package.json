@@ -11,6 +11,7 @@
 		"test:deployment": "node scripts/verify-vercel-upload.mjs",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
 		"migrate": "bun run scripts/migrate.js",
+		"repair:trash": "bun run scripts/repair-trash-schema.js",
 		"seed": "bun run scripts/seed.js",
 		"seed:demo": "bun run scripts/seed-demo.js",
 		"seed:prototype": "bun run scripts/seed-prototype.js",

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
+import { repairTrashSchema } from '../../scripts/lib/trash-schema.js';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const output =
@@ -46,7 +47,8 @@ let browser;
 const reports = [],
 	errors = [];
 try {
-	await state.setupDatabase({ maxConnections: 8 });
+	// Like Neon HTTP, avoid persistent prepared plans while exercising live DDL.
+	await state.setupDatabase({ maxConnections: 8, prepare: false });
 	state.env.OPENAI_API_KEY = '';
 	const sql = state.db();
 	await server.listen();
@@ -255,6 +257,78 @@ try {
 		});
 	} finally {
 		await c.close();
+	}
+	for (const [width, theme] of [
+		[360, 'light'],
+		[1440, 'dark']
+	]) {
+		const { doc } = await seed();
+		const { c, p } = await context(width, theme);
+		try {
+			await sql`ALTER TABLE documents DROP COLUMN lifecycle_version`;
+			await opened(p, '/edit/equipment-old');
+			await p.getByLabel('문서 제목', { exact: true }).fill('작성 중인 제목 유지');
+			await p
+				.getByRole('checkbox', {
+					name: '저장된 문서를 휴지통으로 이동하는 것을 확인했습니다.',
+					exact: true
+				})
+				.check();
+			let before = await snapshot();
+			await enter(p, p.getByRole('button', { name: '휴지통으로 이동', exact: true }));
+			await p
+				.getByRole('alert')
+				.filter({ hasText: '서버 업데이트가 적용되지 않아 이동하지 않았습니다.' })
+				.waitFor();
+			assert.equal(
+				await p.getByLabel('문서 제목', { exact: true }).inputValue(),
+				'작성 중인 제목 유지'
+			);
+			assert.deepEqual(await snapshot(), before);
+			assert.doesNotMatch(await p.locator('body').innerText(), /lifecycle_version|42703/);
+			await p.screenshot({ path: output + `/schema-delete-${width}-${theme}.png`, fullPage: true });
+			await repairTrashSchema({ sql, apply: true });
+			for (const row of before.documents) row.lifecycle_version = 0;
+			assert.deepEqual(await snapshot(), before);
+			await opened(p, '/edit/equipment-old');
+			await p
+				.getByRole('checkbox', {
+					name: '저장된 문서를 휴지통으로 이동하는 것을 확인했습니다.',
+					exact: true
+				})
+				.check();
+			await enter(p, p.getByRole('button', { name: '휴지통으로 이동', exact: true }));
+			await p.waitForURL('**/trash?open=*');
+			preserved(before, await snapshot(), doc.id);
+			await sql`ALTER TABLE documents DROP COLUMN lifecycle_version`;
+			await opened(p, '/trash?open=' + doc.id);
+			before = await snapshot();
+			await enter(p, restore(p));
+			await p
+				.getByRole('alert')
+				.filter({ hasText: '서버 업데이트가 적용되지 않아 복구하지 않았습니다.' })
+				.waitFor();
+			assert.deepEqual(await snapshot(), before);
+			await p.screenshot({
+				path: output + `/schema-restore-${width}-${theme}.png`,
+				fullPage: true
+			});
+			await repairTrashSchema({ sql, apply: true });
+			for (const row of before.documents) row.lifecycle_version = 0;
+			assert.deepEqual(await snapshot(), before);
+			await opened(p, '/trash?open=' + doc.id);
+			await enter(p, restore(p));
+			await restored(p);
+			preserved(before, await snapshot(), doc.id);
+			reports.push({
+				width,
+				theme,
+				legacySchema:
+					'503 preserves inputs/archive; repair and reload allow deletion and restoration'
+			});
+		} finally {
+			await c.close();
+		}
 	}
 	assert.deepEqual(errors, []);
 	assert.equal(externalAttempts, 0);

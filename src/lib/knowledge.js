@@ -2,6 +2,8 @@ import { slugify, createLinkCatalog, linkedWikiTokens } from './wiki-links.js';
 export { slugify };
 
 export const documentHref = (slug) => `/wiki/${encodeURIComponent(slug)}`;
+export const knowledgeMapHref = (slug = '', page = 1) =>
+	`/?view=map${slug ? '&center=' + encodeURIComponent(slug) : ''}${page > 1 ? '&mapPage=' + page : ''}#knowledge-map`;
 export const maxDraftDocuments = 32;
 
 export function validateDraftDocuments(documents) {
@@ -138,8 +140,9 @@ export function documentConnections(document, documents, catalog) {
 	return { related, backlinks };
 }
 
-export function buildKnowledgeGraph(documents, aliases = []) {
+export function buildKnowledgeGraph(documents, aliases = [], { centerSlug = '', page = 1 } = {}) {
 	const catalog = createLinkCatalog(documents, aliases);
+	documents = documents.filter((document) => !document.deleted_at);
 	const edges = [];
 	const missing = new Map();
 	const counts = new Map(documents.map((doc) => [doc.slug, 0]));
@@ -154,7 +157,10 @@ export function buildKnowledgeGraph(documents, aliases = []) {
 	const hubs = documents
 		.map((doc) => ({ ...documentSummary(doc), links: counts.get(doc.slug) }))
 		.sort((a, b) => b.links - a.links || a.title.localeCompare(b.title, 'ko'));
-	const center = hubs[0];
+	const requestedCenter = hubs.find(
+		(doc) => doc.slug === (catalog.bySlug.get(centerSlug) || centerSlug)
+	);
+	const center = requestedCenter || hubs[0];
 	const neighbors = center
 		? new Set(
 				edges
@@ -162,16 +168,30 @@ export function buildKnowledgeGraph(documents, aliases = []) {
 					.flatMap((edge) => [edge.source, edge.target])
 			)
 		: new Set();
+	const connected = hubs.filter((doc) => doc.slug !== center?.slug && neighbors.has(doc.slug));
+	const pages = Math.max(1, Math.ceil(connected.length / 6));
+	const requestedPage = Number(page);
+	const currentPage = Number.isSafeInteger(requestedPage)
+		? Math.min(pages, Math.max(1, requestedPage))
+		: 1;
 	const nodes = center
 		? [
 				center,
-				...hubs.filter((doc) => doc.slug !== center.slug && neighbors.has(doc.slug)).slice(0, 6)
+				...connected.slice((currentPage - 1) * 6, currentPage * 6).map((doc) => ({
+					...doc,
+					outgoing: edges.some((edge) => edge.source === center.slug && edge.target === doc.slug),
+					incoming: edges.some((edge) => edge.source === doc.slug && edge.target === center.slug)
+				}))
 			]
 		: [];
 	const visible = new Set(nodes.map((node) => node.slug));
 	return {
 		hubs,
 		nodes,
+		neighborCount: connected.length,
+		page: currentPage,
+		pages,
+		centerUnavailable: !!centerSlug && !requestedCenter,
 		edges: edges.filter((edge) => visible.has(edge.source) && visible.has(edge.target)),
 		allEdges: edges,
 		linkCount: edges.length,

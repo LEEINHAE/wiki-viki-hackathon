@@ -39,7 +39,16 @@ export async function load({ url }) {
 			q ? searchDocuments(q) : []
 		]);
 		const { documents, aliases } = snapshot;
-		const graph = buildKnowledgeGraph(documents, aliases);
+		const graph = buildKnowledgeGraph(
+			documents,
+			aliases,
+			view === 'map'
+				? {
+						centerSlug: url.searchParams.get('center') || '',
+						page: url.searchParams.get('mapPage') || 1
+					}
+				: {}
+		);
 		return {
 			q,
 			view,
@@ -57,7 +66,20 @@ export async function load({ url }) {
 				drafts: drafts.length
 			},
 			hubs: graph.hubs.slice(0, 6),
-			graph: { nodes: graph.nodes, edges: graph.edges },
+			graph: {
+				nodes: graph.nodes,
+				edges: graph.edges,
+				neighborCount: graph.neighborCount,
+				page: graph.page,
+				pages: graph.pages,
+				centerUnavailable: graph.centerUnavailable,
+				documents:
+					view === 'map'
+						? graph.hubs
+								.map(({ slug, title }) => ({ slug, title }))
+								.sort((a, b) => a.title.localeCompare(b.title, 'ko'))
+						: []
+			},
 			missing: graph.missing
 		};
 	} catch (cause) {

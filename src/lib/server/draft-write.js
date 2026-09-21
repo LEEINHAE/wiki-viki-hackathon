@@ -11,6 +11,39 @@ export async function getDraft(sql, id) {
 	return draft ? { ...draft, version: reviewVersion(draft.snapshot) } : null;
 }
 
+export async function deleteDraftBatch(sql, drafts) {
+	const requested = JSON.stringify(
+		drafts.map(({ id, snapshot }) => ({ id: String(id), snapshot }))
+	);
+	const results = await sql.transaction(
+		(tx) => [
+			tx`SET LOCAL lock_timeout = '10s'`,
+			// Stable lock order prevents overlapping selections from deadlocking.
+			tx`SELECT d.id FROM drafts d
+				JOIN jsonb_to_recordset(${requested}::jsonb) AS r(id bigint, snapshot text) ON r.id=d.id
+				ORDER BY d.id FOR UPDATE OF d`,
+			// Read a fresh snapshot after waiting for editors or publishers.
+			// The count guard also rolls back if a trigger silently skips a deletion.
+			tx`WITH requested AS MATERIALIZED (
+				SELECT * FROM jsonb_to_recordset(${requested}::jsonb) AS r(id bigint, snapshot text)
+			), eligible AS MATERIALIZED (
+				SELECT d.id FROM drafts d JOIN requested r ON d.id=r.id
+				WHERE d.status<>'published' AND (to_jsonb(d)-'id')=r.snapshot::jsonb
+			), changed AS (
+				DELETE FROM drafts WHERE id IN (SELECT id FROM eligible)
+					AND (SELECT count(*) FROM eligible)=${drafts.length}
+				RETURNING id
+			)
+			SELECT (SELECT count(*) FROM changed) AS deleted,
+				1 / CASE WHEN (SELECT count(*) FROM changed)=
+					CASE WHEN (SELECT count(*) FROM eligible)=${drafts.length} THEN ${drafts.length} ELSE 0 END
+				THEN 1 ELSE 0 END AS atomic_guard`
+		],
+		{ isolationLevel: 'ReadCommitted' }
+	);
+	return Number(results.at(-1)[0].deleted) === drafts.length;
+}
+
 // Inspection runs before this transaction. Lock one row, then recheck its exact
 // database snapshot in a fresh statement before changing or deleting anything.
 export async function changeDraft(sql, draft, values = null, governance = null) {

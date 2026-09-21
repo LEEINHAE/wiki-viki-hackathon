@@ -1,5 +1,6 @@
 export const batchReviewLimit = 8;
 export const reviewPageSize = 20;
+export const batchDeleteLimit = reviewPageSize;
 
 export const reviewToken = (draft) => `${draft.id}:${draft.version}`;
 

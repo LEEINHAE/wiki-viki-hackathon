@@ -6,7 +6,7 @@ export const env = { OPENAI_API_KEY: 'test-only-key' };
 let sql;
 let schema;
 
-export async function setupDatabase({ maxConnections = 1 } = {}) {
+export async function setupDatabase({ maxConnections = 1, prepare = true } = {}) {
 	const target = new URL(process.env.GOVERNANCE_TEST_DATABASE_URL);
 	if (
 		process.env.RUN_GOVERNANCE_DB_TESTS !== '1' ||
@@ -19,6 +19,7 @@ export async function setupDatabase({ maxConnections = 1 } = {}) {
 	schema = `governance_${randomUUID().replaceAll('-', '')}`;
 	sql = postgres(target.toString(), {
 		max: maxConnections,
+		prepare,
 		connection: { search_path: schema, application_name: schema },
 		// Neon sends the application's pre-serialized JSON strings as-is.
 		// Match that wire representation when running the same SQL via postgres.

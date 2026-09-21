@@ -4,6 +4,7 @@ import { slugify } from '$lib/server/wiki.js';
 import { getEditableDocument, editableAliases, saveDocument } from '$lib/server/document-write.js';
 import {
 	changeDocumentTrash,
+	isTrashSchemaMissing,
 	validDocumentId,
 	validDocumentVersion
 } from '$lib/server/document-trash.js';
@@ -211,6 +212,12 @@ export const actions = {
 			redirect(303, '/trash?open=' + values.documentId);
 		} catch (cause) {
 			if (isRedirect(cause)) throw cause;
+			if (isTrashSchemaMissing(cause))
+				return fail(503, {
+					...values,
+					message:
+						'휴지통 기능에 필요한 서버 업데이트가 적용되지 않아 이동하지 않았습니다. 입력을 유지했습니다. 관리자에게 업데이트를 요청한 뒤 문서를 다시 열어 주세요.'
+				});
 			return fail(500, {
 				...values,
 				message:

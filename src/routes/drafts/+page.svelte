@@ -225,7 +225,7 @@
 					? `원본: ${selected.source_name || '직접 작성'} · ${formatDate(selected.created_at)}`
 					: working
 						? '입력을 복사해 보관하고 초안의 현재 상태를 확인해 주세요.'
-						: '본문을 읽고 검토한 초안을 선택하세요. 여러 초안을 한 번에 게시할 수 있습니다.'}
+						: '본문을 읽고 초안을 선택하세요. 여러 초안을 한 번에 게시하거나 삭제할 수 있습니다.'}
 			</p>
 		</header>
 		{#if validRecoveryDraftId(scope)}
@@ -247,7 +247,7 @@
 		{#if data.databaseError}<StatusNotice tone="error" role="alert">
 				초안을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.
 			</StatusNotice>{/if}
-		{#if (feedback?.message && feedback.action !== 'publishBatch') || actionError}<StatusNotice
+		{#if (feedback?.message && !['publishBatch', 'deleteBatch'].includes(feedback.action)) || actionError}<StatusNotice
 				tone="error"
 				role="alert"
 			>

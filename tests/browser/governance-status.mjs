@@ -212,7 +212,7 @@ try {
 		let { doc, draft } = await seed();
 		const { c, p } = await context(width, theme);
 		await p.goto(base + '/drafts', { waitUntil: 'networkidle' });
-		await p.getByRole('checkbox', { name: draft.title + ' 검토 완료로 선택', exact: true }).check();
+		await p.getByRole('checkbox', { name: draft.title + ' 선택', exact: true }).check();
 		assert.equal(
 			await submit(p, p.getByRole('button', { name: '선택한 초안 게시', exact: true })),
 			200

@@ -77,8 +77,7 @@ async function seed(
 		VALUES (${title},${title},${content},'교대업무.xlsx','Editor-07',${status},${JSON.stringify(governance)},'[]') RETURNING id`
 	)[0].id;
 }
-const select = (p, title) =>
-	p.getByRole('checkbox', { name: title + ' 검토 완료로 선택', exact: true });
+const select = (p, title) => p.getByRole('checkbox', { name: title + ' 선택', exact: true });
 const submit = (p) => p.getByRole('button', { name: '선택한 초안 게시', exact: true });
 async function shot(p, name) {
 	await p.screenshot({ path: `${output}/${name}.png`, fullPage: true });
@@ -141,8 +140,12 @@ try {
 					'압력계와 경보'
 				)
 			);
-			assert.equal(await select(p, '확인필요').isDisabled(), true);
-			assert.equal(await select(p, '통합검토').isDisabled(), true);
+			for (const title of ['확인필요', '통합검토']) {
+				assert.equal(await select(p, title).isDisabled(), false);
+				await select(p, title).check();
+				assert.equal(await submit(p).isDisabled(), true);
+				await select(p, title).uncheck();
+			}
 			assert.equal(await p.locator('.review-body img').count(), 0);
 			const ids = await p.locator('[id]').evaluateAll((nodes) => nodes.map((n) => n.id));
 			assert.equal(new Set(ids).size, ids.length);
@@ -181,7 +184,7 @@ try {
 				true
 			);
 			const warning = p.waitForEvent('dialog').then(async (dialog) => {
-				assert.ok(dialog.message().includes('초안을 게시 중입니다.'));
+				assert.ok(dialog.message().includes('선택한 초안을 처리 중입니다.'));
 				await dialog.dismiss();
 			});
 			await p
@@ -255,16 +258,20 @@ try {
 	const paged = await browser.newPage({ viewport: { width: 720, height: 475 } });
 	await observe(paged);
 	await paged.goto(base + '/drafts', { waitUntil: 'networkidle' });
-	await paged.getByRole('button', { name: '앞의 8개 선택', exact: true }).click();
+	await paged.getByRole('button', { name: '게시할 8개 선택', exact: true }).click();
 	assert.equal(await paged.locator('input[name="draft"]:checked').count(), 8);
-	assert.equal(await paged.locator('input[name="draft"]:not(:checked):disabled').count(), 12);
+	assert.equal(await submit(paged).isDisabled(), false);
+	await paged.getByRole('button', { name: '선택 해제', exact: true }).click();
+	await paged.getByRole('button', { name: '전체 선택', exact: true }).click();
+	assert.equal(await paged.locator('input[name="draft"]:checked').count(), 20);
+	assert.equal(await submit(paged).isDisabled(), true);
 	await paged
 		.getByRole('navigation', { name: '초안 상태 필터' })
 		.getByRole('link', { name: /^검토 대기/ })
 		.click();
 	await paged.waitForURL(/status=review/);
 	assert.equal(await paged.locator('input[name="draft"]:checked').count(), 0);
-	await paged.getByRole('button', { name: '앞의 8개 선택', exact: true }).click();
+	await paged.getByRole('button', { name: '전체 선택', exact: true }).click();
 	await paged.getByRole('link', { name: '다음 →', exact: true }).click();
 	await paged.waitForURL(/page=2/);
 	assert.equal(await paged.locator('.review-row').count(), 1);

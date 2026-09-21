@@ -3,6 +3,7 @@ import { db } from '$lib/server/db.js';
 import { getEditableDocument } from '$lib/server/document-write.js';
 import {
 	changeDocumentTrash,
+	isTrashSchemaMissing,
 	validDocumentId,
 	validDocumentVersion
 } from '$lib/server/document-trash.js';
@@ -80,6 +81,12 @@ export const actions = {
 			redirect(303, '/wiki/' + encodeURIComponent(result.slug));
 		} catch (cause) {
 			if (isRedirect(cause)) throw cause;
+			if (isTrashSchemaMissing(cause))
+				return fail(503, {
+					...values,
+					message:
+						'휴지통 기능에 필요한 서버 업데이트가 적용되지 않아 복구하지 않았습니다. 보관된 문서는 유지됩니다. 관리자에게 업데이트를 요청한 뒤 휴지통을 다시 열어 주세요.'
+				});
 			return fail(500, {
 				...values,
 				message:

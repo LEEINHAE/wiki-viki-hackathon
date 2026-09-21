@@ -1,5 +1,9 @@
 import { db } from './db.js';
 
+export function isTrashSchemaMissing(cause) {
+	return cause?.code === '42703' && /\blifecycle_version\b/.test(cause?.message || '');
+}
+
 export const validDocumentId = (id) =>
 	/^[1-9]\d{0,18}$/.test(id) && BigInt(id) <= 9223372036854775807n;
 export const validDocumentVersion = (version) => /^[a-f0-9]{64}$/.test(version);

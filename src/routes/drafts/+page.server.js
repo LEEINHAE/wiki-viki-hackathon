@@ -5,11 +5,22 @@ import { validHandle, ContentBlockedError } from '$lib/server/governance.js';
 import { inspectDocumentContent } from '$lib/server/document-governance.js';
 import { slugify, renderWiki } from '$lib/server/wiki.js';
 import { reviewVersion, publicationAliases, publishDraft } from '$lib/server/draft-publication.js';
-import { validDraftId, validDraftVersion, getDraft, changeDraft } from '$lib/server/draft-write.js';
+import {
+	validDraftId,
+	validDraftVersion,
+	getDraft,
+	changeDraft,
+	deleteDraftBatch
+} from '$lib/server/draft-write.js';
 import { getEditableDocument } from '$lib/server/document-write.js';
 import { mergeAvailable, generateMerge, MergeError } from '$lib/server/merge-ai.js';
 import { mergeHistory, mergeHistoryInspection, normalizeMergeText } from '$lib/merge-history.js';
-import { batchReviewLimit, batchReviewReason, reviewListPage } from '$lib/draft-review.js';
+import {
+	batchReviewLimit,
+	batchDeleteLimit,
+	batchReviewReason,
+	reviewListPage
+} from '$lib/draft-review.js';
 import {
 	proposalMatches,
 	mergeAliases,
@@ -524,7 +535,59 @@ async function publishBatch({ request }) {
 	return { action: 'publishBatch', selection, results };
 }
 
+async function deleteBatch({ request }) {
+	const form = await request.formData();
+	const selection = form.getAll('draft').map(String);
+	const entries = selection.map((token) => token.split(':'));
+	const feedback = { action: 'deleteBatch', selection: selection.slice(0, batchDeleteLimit) };
+	if (
+		form.get('confirmDelete') !== 'yes' ||
+		!entries.length ||
+		entries.length > batchDeleteLimit ||
+		entries.some(
+			([id, version, extra]) =>
+				!validDraftId(id) || !validDraftVersion(version || '') || extra !== undefined
+		) ||
+		new Set(entries.map(([id]) => id)).size !== entries.length
+	)
+		return fail(400, {
+			...feedback,
+			message: `삭제할 초안을 1~${batchDeleteLimit}개 선택하고 영구 삭제 확인 항목을 선택해 주세요.`
+		});
+	const changed = () =>
+		fail(409, {
+			...feedback,
+			message:
+				'선택한 초안 중 변경되었거나 이미 게시·삭제된 항목이 있습니다. 이번 요청에서는 아무 초안도 삭제하지 않았습니다. 목록을 새로 확인한 뒤 다시 선택해 주세요.'
+		});
+	try {
+		const sql = db();
+		const rows = await sql`SELECT d.*, (to_jsonb(d)-'id')::text AS snapshot FROM drafts d
+			WHERE id IN (SELECT value::bigint FROM jsonb_array_elements_text(${JSON.stringify(entries.map(([id]) => id))}::jsonb))`;
+		const byId = new Map(rows.map((draft) => [String(draft.id), draft]));
+		const drafts = entries.map(([id]) => byId.get(id));
+		if (
+			drafts.some(
+				(draft, index) =>
+					!draft ||
+					draft.status === 'published' ||
+					reviewVersion(draft.snapshot) !== entries[index][1]
+			)
+		)
+			return changed();
+		if (!(await deleteDraftBatch(sql, drafts))) return changed();
+		return { ...feedback, deleted: drafts.map(({ id, title }) => ({ id: String(id), title })) };
+	} catch {
+		return fail(503, {
+			...feedback,
+			message:
+				'삭제 결과를 확인하지 못했습니다. 선택을 유지했습니다. 목록을 새로 확인한 뒤 다시 시도해 주세요.'
+		});
+	}
+}
+
 export const actions = {
+	deleteBatch,
 	publishBatch,
 	applyMerge: applyMergeAction,
 	generateMerge: (event) => mergeAction(event),

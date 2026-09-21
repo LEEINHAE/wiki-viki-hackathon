@@ -5,15 +5,25 @@
 	import { beforeNavigate, invalidateAll } from '$app/navigation';
 	import { onMount, onDestroy, untrack } from 'svelte';
 	import { formatDate } from '$lib/knowledge.js';
-	import { batchReviewLimit, batchReviewReason, reviewToken } from '$lib/draft-review.js';
+	import {
+		batchReviewLimit,
+		batchDeleteLimit,
+		batchReviewReason,
+		reviewToken
+	} from '$lib/draft-review.js';
 	let { list, drafts, form } = $props();
 	let picked = $state(
-		untrack(() => [...new Set(form?.action === 'publishBatch' ? form.selection || [] : [])])
+		untrack(() => [
+			...new Set(['publishBatch', 'deleteBatch'].includes(form?.action) ? form.selection || [] : [])
+		])
 	);
 	let expanded = $state({}),
 		saving = $state(false),
 		mounted = $state(false),
 		problem = $state('');
+	let pendingAction = $state(''),
+		deleteConfirmed = $state(false);
+	let previousSelection = '';
 	let active = true;
 	let previousList = untrack(() => `${list.filter}:${list.page}`);
 	let toolbarTop = $state(78),
@@ -36,13 +46,30 @@
 		return () => observer.disconnect();
 	});
 	onDestroy(() => (active = false));
-	const eligible = $derived(list.items.filter((draft) => !batchReviewReason(draft)));
-	const tokens = $derived(eligible.map(reviewToken));
+	const tokens = $derived(list.items.map(reviewToken));
+	const publishTokens = $derived(
+		list.items.filter((draft) => !batchReviewReason(draft)).map(reviewToken)
+	);
 	const selected = $derived(picked.filter((token) => tokens.includes(token)));
-	const batch = $derived(form?.action === 'publishBatch' ? form : null);
+	const canPublish = $derived(
+		selected.length > 0 &&
+			selected.length <= batchReviewLimit &&
+			list.items
+				.filter((draft) => selected.includes(reviewToken(draft)))
+				.every((draft) => !batchReviewReason(draft))
+	);
+	const batch = $derived(['publishBatch', 'deleteBatch'].includes(form?.action) ? form : null);
+	const deleted = $derived(batch?.deleted || []);
 	const results = $derived(batch?.results || []);
 	const published = $derived(results.filter((item) => item.outcome !== 'failed'));
 	const failed = $derived(results.filter((item) => item.outcome === 'failed'));
+	$effect(() => {
+		const signature = selected.join('|');
+		if (signature !== previousSelection) {
+			previousSelection = signature;
+			deleteConfirmed = false;
+		}
+	});
 	$effect(() => {
 		// A changed version or a different filter/page needs a new explicit selection.
 		const currentList = `${list.filter}:${list.page}`;
@@ -64,7 +91,7 @@
 			return;
 		else if (
 			!window.confirm(
-				'초안을 게시 중입니다. 이동해도 처리는 계속될 수 있습니다. 결과를 확인하기 전에 이동할까요?'
+				'선택한 초안을 처리 중입니다. 이동해도 처리는 계속될 수 있습니다. 결과를 확인하기 전에 이동할까요?'
 			)
 		)
 			navigation.cancel();
@@ -79,34 +106,41 @@
 			problem = '목록을 새로 불러오지 못했습니다. 선택을 유지했으니 다시 시도해 주세요.';
 		}
 	}
-	function submit({ cancel }) {
-		if (saving || !selected.length) {
+	function submit({ cancel, submitter }) {
+		const deleting = submitter?.getAttribute('formaction')?.includes('?/deleteBatch');
+		if (saving || !selected.length || (deleting ? !deleteConfirmed : !canPublish)) {
 			cancel();
 			return;
 		}
 		saving = true;
+		pendingAction = deleting ? 'deleteBatch' : 'publishBatch';
 		problem = '';
 		return async ({ result, update }) => {
 			try {
 				if (!active) return;
 				if (!['success', 'failure'].includes(result.type)) {
-					problem =
-						'게시 결과를 확인하지 못했습니다. 목록을 새로 확인해 주세요. 이미 게시된 초안은 다시 선택해도 중복 게시하지 않습니다.';
+					problem = deleting
+						? '삭제 결과를 확인하지 못했습니다. 선택을 유지했습니다. 목록을 새로 확인한 뒤 다시 시도해 주세요.'
+						: '게시 결과를 확인하지 못했습니다. 목록을 새로 확인해 주세요. 이미 게시된 초안은 다시 선택해도 중복 게시하지 않습니다.';
 					return;
 				}
 				await update({ reset: false });
 				if (!active) return;
 				const completed = new Set(
-					(result.data?.results || [])
+					(result.data?.deleted || result.data?.results || [])
 						.filter((item) => item.outcome !== 'failed')
 						.map((item) => String(item.id))
 				);
 				picked = picked.filter((token) => !completed.has(token.split(':')[0]));
 			} catch {
 				if (active)
-					problem = '화면을 갱신하지 못했습니다. 게시 결과와 목록을 확인한 뒤 다시 시도해 주세요.';
+					problem = '화면을 갱신하지 못했습니다. 처리 결과와 목록을 확인한 뒤 다시 시도해 주세요.';
 			} finally {
-				if (active) saving = false;
+				if (active) {
+					saving = false;
+					pendingAction = '';
+					deleteConfirmed = false;
+				}
 			}
 		};
 	}
@@ -131,6 +165,14 @@
 			>목록 새로 확인</button
 		>
 	</StatusNotice>{/if}
+{#if deleted.length}<section class="batch-results" aria-label="선택 삭제 결과">
+		<StatusNotice tone="success" role="status">
+			<h2>삭제 완료 · {deleted.length}개</h2>
+			<ul>
+				{#each deleted as item}<li>{item.title}</li>{/each}
+			</ul>
+		</StatusNotice>
+	</section>{/if}
 {#if results.length}<section class="batch-results" aria-label="선택 게시 결과">
 		<StatusNotice tone={failed.length ? 'warning' : 'success'}>
 			<h2>게시 결과 · 완료 {published.length}개 / 확인 필요 {failed.length}개</h2>
@@ -177,36 +219,67 @@
 			bind:this={toolbar}
 		>
 			<div>
-				<strong>{mounted ? `${selected.length}개 선택` : '검토 후 선택 게시'}</strong>
+				<strong>{mounted ? `${selected.length}개 선택` : '초안 선택 후 게시·삭제'}</strong>
 				<p class="small muted">
-					본문을 검토한 초안을 선택하세요. 한 번에 최대 {batchReviewLimit}개를 새 문서로 게시합니다.
+					현재 페이지에서 선택하세요. 게시 최대 {batchReviewLimit}개 · 삭제 최대 {batchDeleteLimit}개.
 				</p>
 			</div>
 			<div class="review-actions">
+				{#if mounted && publishTokens.length && (publishTokens.length > batchReviewLimit || publishTokens.length < tokens.length)}
+					<button
+						type="button"
+						class="secondary-button"
+						disabled={saving}
+						onclick={() => (picked = publishTokens.slice(0, batchReviewLimit))}
+					>
+						게시할 {Math.min(publishTokens.length, batchReviewLimit)}개 선택
+					</button>
+				{/if}
 				{#if mounted}<button
 						type="button"
 						class="secondary-button"
 						disabled={saving || !tokens.length}
-						onclick={() => (picked = selected.length ? [] : tokens.slice(0, batchReviewLimit))}
+						onclick={() => (picked = selected.length ? [] : tokens.slice(0, batchDeleteLimit))}
 					>
-						{selected.length
-							? '선택 해제'
-							: tokens.length > batchReviewLimit
-								? `앞의 ${batchReviewLimit}개 선택`
-								: '전체 선택'}
+						{selected.length ? '선택 해제' : '전체 선택'}
 					</button>{/if}
 				<button
 					class="primary-button"
 					name="confirmPublish"
 					value="yes"
-					disabled={saving || (mounted && !selected.length)}
+					disabled={saving || (mounted && !canPublish)}
 				>
-					{saving ? '선택 초안 게시 중…' : '선택한 초안 게시'}
+					{pendingAction === 'publishBatch' ? '선택 초안 게시 중…' : '선택한 초안 게시'}
 				</button>
 			</div>
 		</div>
+		{#if mounted && selected.length && !canPublish}<p class="small muted">
+				선택 게시는 검토 대기 상태이며 개별 확인이 필요 없는 초안 {batchReviewLimit}개 이하만
+				가능합니다. 삭제는 모든 미게시 초안을 선택할 수 있습니다.
+			</p>{/if}
+		<div class="batch-delete-controls">
+			<label
+				><input
+					type="checkbox"
+					name="confirmDelete"
+					value="yes"
+					bind:checked={deleteConfirmed}
+					disabled={saving || (mounted && !selected.length)}
+				/>
+				선택한 초안을 영구 삭제하며 복구할 수 없음을 확인했습니다.</label
+			>
+			<button
+				class="danger-button"
+				formaction={`?/deleteBatch&status=${list.filter}&page=${list.page}`}
+				disabled={saving || (mounted && (!selected.length || !deleteConfirmed))}
+			>
+				{pendingAction === 'deleteBatch' ? '선택 초안 삭제 중…' : '선택한 초안 삭제'}
+			</button>
+		</div>
 		{#if saving}<StatusNotice tone="pending" role="status">
-				선택한 초안을 검사하고 게시하고 있습니다. 완료되면 항목별 결과를 보여 드립니다.
+				{pendingAction === 'deleteBatch'
+					? '선택한 초안을 삭제하고 있습니다. 완료되면 삭제 결과를 보여 드립니다.'
+					: '선택한 초안을 검사하고 게시하고 있습니다. 완료되면 항목별 결과를 보여 드립니다.'}
 			</StatusNotice>{/if}
 		<p class="review-hint small muted">
 			내용과 별칭은 저장된 초안 기준입니다. 수정·통합은 각 초안에서 진행하세요. 필터·페이지를 바꾸면
@@ -224,11 +297,10 @@
 							name="draft"
 							value={token}
 							bind:group={picked}
-							aria-label={`${draft.title} 검토 완료로 선택`}
+							aria-label={`${draft.title} 선택`}
 							aria-describedby={`review-state-${draft.id}`}
 							disabled={saving ||
-								!!reason ||
-								(mounted && selected.length >= batchReviewLimit && !selected.includes(token))}
+								(mounted && selected.length >= batchDeleteLimit && !selected.includes(token))}
 						/>
 						<div class="review-title">
 							<h2>{draft.title}</h2>
@@ -306,11 +378,31 @@
 <noscript
 	><p class="small muted">
 		초안의 체크박스를 선택한 뒤 선택 게시 버튼을 누르세요. 한 번에 최대 {batchReviewLimit}개를
-		게시할 수 있습니다.
+		게시할 수 있습니다. 삭제는 최대 {batchDeleteLimit}개를 선택하고 영구 삭제 확인 항목을 체크한 뒤
+		선택 삭제 버튼을 누르세요.
 	</p>
 </noscript>
 
 <style>
+	.batch-delete-controls {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 1rem;
+	}
+	.batch-delete-controls label {
+		display: flex;
+		align-items: start;
+		gap: 0.5rem;
+		font-size: 0.85rem;
+		flex: 1 1 18rem;
+	}
+	.batch-delete-controls input {
+		margin-top: 0.2rem;
+		flex-shrink: 0;
+	}
 	.review-filters {
 		margin: 1.5rem 0;
 	}
@@ -467,8 +559,9 @@
 			gap: 0.6rem;
 		}
 		.review-actions > * {
-			flex: 1;
+			flex: 1 1 auto;
 			justify-content: center;
+			white-space: nowrap;
 		}
 		.review-toolbar p {
 			font-size: 0.75rem;
