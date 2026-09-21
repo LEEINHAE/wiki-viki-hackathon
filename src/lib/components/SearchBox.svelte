@@ -1,14 +1,17 @@
 <script>
-	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { documentHref } from '$lib/knowledge.js';
-	import Icon from './Icon.svelte';
-	let { initial = '', compact = false, inputId } = $props();
-	let query = $state(untrack(() => initial));
+	import { page } from '$app/state';
+	import { permits } from '$lib/auth-policy.js';
+	import { docUrl } from '$lib/wiki-utils.js';
+	import { recordSearch } from '$lib/trending.js';
+	let { compact = false, initial = '', onwikify = () => {} } = $props();
+	const canEdit = $derived(page.data.demo || permits(page.data.user?.role, 'editor'));
+	let query = $state('');
+	let suggestions = $state([]);
 	let focused = $state(false);
-	let results = $state([]);
-	let loading = $state(false);
 	let selected = $state(-1);
+	let problem = $state('');
+	let loading = $state(false);
 	const uid = $props.id();
 	$effect(() => {
 		query = initial;
@@ -16,22 +19,26 @@
 	$effect(() => {
 		const q = query.trim();
 		selected = -1;
-		results = [];
-		if (!q || !focused) {
+		problem = '';
+		if (!q) {
+			suggestions = [];
 			loading = false;
 			return;
 		}
-		const controller = new AbortController();
+		suggestions = [];
 		loading = true;
+		const controller = new AbortController();
 		const timer = setTimeout(async () => {
 			try {
 				const response = await fetch(`/api/search?q=${encodeURIComponent(q)}`, {
 					signal: controller.signal
 				});
-				const body = await response.json();
-				if (!controller.signal.aborted) results = body.results || [];
-			} catch {
-				/* The search form still works if suggestions are unavailable. */
+				if (!response.ok)
+					throw new Error('검색 제안을 불러오지 못했습니다. 검색 버튼으로 다시 시도해 주세요.');
+				const results = await response.json();
+				if (!controller.signal.aborted) suggestions = results;
+			} catch (error) {
+				if (!controller.signal.aborted) problem = error.message;
 			} finally {
 				if (!controller.signal.aborted) loading = false;
 			}
@@ -41,81 +48,97 @@
 			controller.abort();
 		};
 	});
-	function submit(event) {
+	function search(event) {
 		event.preventDefault();
 		focused = false;
-		if (query.trim()) goto(`/?q=${encodeURIComponent(query.trim())}`);
+		if (query.trim()) {
+			recordSearch(query);
+			goto(`/?q=${encodeURIComponent(query.trim())}`);
+		}
 	}
 	function keydown(event) {
 		if (event.key === 'Escape') {
 			focused = false;
 			selected = -1;
 		}
-		if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+		if (event.key === 'ArrowDown') {
 			event.preventDefault();
 			focused = true;
-			selected = Math.max(
-				-1,
-				Math.min(results.length - 1, selected + (event.key === 'ArrowDown' ? 1 : -1))
-			);
+			selected = Math.min(selected + 1, suggestions.length - 1);
 		}
-		if (event.key === 'Enter' && focused && selected >= 0 && results[selected]) {
+		if (event.key === 'ArrowUp') {
+			event.preventDefault();
+			selected = Math.max(-1, selected - 1);
+		}
+		if (event.key === 'Enter' && focused && selected >= 0) {
 			event.preventDefault();
 			focused = false;
-			goto(documentHref(results[selected].slug));
+			recordSearch(query);
+			goto(docUrl(suggestions[selected]));
 		}
 	}
 </script>
 
 <div
 	class:compact
-	class="search-box"
+	class="searchbox"
 	onfocusout={(event) => {
 		if (!event.currentTarget.contains(event.relatedTarget)) focused = false;
 	}}
 >
-	<form method="GET" action="/" role="search" onsubmit={submit}>
-		<span class="search-icon"><Icon size={compact ? 18 : 24} /></span>
+	<form action="/" method="GET" onsubmit={search} role="search">
+		<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"
+			><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></svg
+		>
 		<input
-			id={inputId}
 			name="q"
-			bind:value={query}
 			maxlength="200"
-			aria-label={compact ? '용어 검색' : '위키 문서 검색'}
+			bind:value={query}
+			onfocus={() => (focused = true)}
+			onkeydown={keydown}
+			placeholder={compact ? '용어 검색' : '예: RFCC, 산단스팀, 교대 인수인계'}
+			aria-label="문서 검색"
 			role="combobox"
 			aria-autocomplete="list"
 			aria-expanded={focused && !!query.trim()}
 			aria-controls={`${uid}-suggestions`}
-			aria-activedescendant={selected >= 0 ? `${uid}-suggestion-${selected}` : undefined}
+			aria-activedescendant={selected >= 0 ? `${uid}-${selected}` : undefined}
 			autocomplete="off"
-			placeholder={compact ? '용어 검색' : '예: RFCC, 산단스팀, 교대 인수인계'}
-			onfocus={() => (focused = true)}
-			onkeydown={keydown}
+			required
 		/>
-		<button class="primary-button" aria-label="검색"
-			>{#if compact}<Icon size={16} name="arrow" />{:else}검색{/if}</button
-		>
+		{#if !compact}<button class="primary-button">검색</button>{/if}
 	</form>
 	{#if focused && query.trim()}
-		<div class="suggestions">
-			<ul id={`${uid}-suggestions`} role="listbox" aria-label="추천 문서">
-				{#each results as result, index}<li
+		<div class="suggestions" id={`${uid}-suggestions`}>
+			<div role="listbox" aria-label="검색 제안">
+				{#each suggestions as item, index}
+					<a
+						id={`${uid}-${index}`}
+						class:selected={selected === index}
 						role="option"
 						aria-selected={selected === index}
-						id={`${uid}-suggestion-${index}`}
+						href={docUrl(item)}
+						onclick={() => {
+							focused = false;
+							recordSearch(query);
+						}}
 					>
-						<a href={documentHref(result.slug)} onclick={() => (focused = false)}
-							><strong>{result.title}</strong><span>{result.excerpt}</span><small
-								>{result.category}</small
-							></a
+						<strong>{item.title}</strong><span>{item.description}</span><small
+							>{item.isDraft ? 'AI 초안' : item.field}</small
 						>
-					</li>{:else}<li class="suggestion-empty" role="presentation">
-						{loading ? '문서를 찾는 중…' : '추천 문서가 없습니다. 검색으로 더 찾아보세요.'}
-					</li>{/each}
-			</ul>
-			<a class="suggestion-create" href="/wikify"
-				>찾는 문서가 없다면 — 기존 자료로 초안 만들기 <span>↗</span></a
-			>
+					</a>
+				{:else}<p class="suggestion-empty" role="status">
+						{loading ? '검색 중…' : problem || '일치하는 문서가 없습니다. 새 지식을 더해 주세요.'}
+					</p>{/each}
+			</div>
+			{#if canEdit}<button
+					type="button"
+					class="suggestion-create"
+					onclick={() => {
+						focused = false;
+						onwikify();
+					}}>「{query}」 문서가 없다면 — 기존 자료를 올려 초안 만들기</button
+				>{/if}
 		</div>
 	{/if}
 </div>

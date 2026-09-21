@@ -1,129 +1,157 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { diffLines } from 'diff';
-import { mergeCandidates, validMergeResult } from '../merge.js';
-import { validDraftId, validDraftVersion } from './draft-write.js';
-import { reviewVersion } from './draft-publication.js';
+import { actorHandle } from '$lib/server/auth.js';
+import { env } from '$env/dynamic/private';
+import { acquireAIRequest } from './ai-limits.js';
+import { assertSafeForAI } from './governance.js';
+import { randomUUID } from 'node:crypto';
+import { fail, redirect } from '@sveltejs/kit';
+import { db } from './db.js';
+import { mergeDocuments, semanticGovernance, aiErrorMessage } from './openai.js';
+import { draftFingerprint } from './merge-contract.js';
+import { inspectContent, validHandle, ContentBlockedError } from './governance.js';
+import { aliasRecords, writeFailure } from './persistence.js';
 
-export function draftFingerprint(draft) {
-	return createHash('sha256')
-		.update(
-			JSON.stringify([
+async function reviewedDraft(values) {
+	const [draft] =
+		await db()`SELECT *,updated_at::text AS version FROM wv_visible_drafts WHERE id=${values.id} AND status<>'published'`;
+	if (!draft) throw new Error('draft_missing');
+	if (!values.version || values.version !== draft.version) throw new Error('version_conflict');
+	return draft;
+}
+function failure(cause, values) {
+	const result =
+		cause instanceof ContentBlockedError || cause.name === 'AIUnavailableError'
+			? { status: 400, message: cause.message }
+			: cause.status
+				? { status: 503, message: aiErrorMessage(cause) }
+				: writeFailure(cause);
+	return fail(result.status, { ...values, mergeContent: values.content, ...result });
+}
+export const mergeActions = {
+	prepareMerge: async ({ request, getClientAddress }) => {
+		const values = Object.fromEntries(await request.formData());
+		values.editor = actorHandle(values.editor);
+		let lease;
+		try {
+			const draft = await reviewedDraft(values);
+			const [target] =
+				await db()`SELECT *,updated_at::text AS version FROM wv_current_documents WHERE id=${values.targetId} AND deleted_at IS NULL AND wv_archived_at IS NULL`;
+			if (!target) throw new Error('document_missing');
+			const aliases = await db()`SELECT alias_title FROM redirects WHERE document_id=${target.id}`;
+			assertSafeForAI(
+				target.title,
+				target.content,
+				target.description,
+				target.source_name,
+				...aliases.map((a) => a.alias_title),
 				draft.title,
-				draft.slug,
 				draft.content,
-				draft.aliases,
+				draft.description,
 				draft.source_name,
-				draft.editor_handle
-			])
-		)
-		.digest('hex');
-}
-
-export async function listMergeTargets(sql, draft) {
-	const rows = await sql`SELECT d.id,d.title,d.slug,
-		jsonb_build_object('document',to_jsonb(d),'aliases',a.aliases)::text AS snapshot,a.aliases
-		FROM documents d CROSS JOIN LATERAL (
-			SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.id),'[]'::jsonb) AS aliases
-			FROM redirects r WHERE r.document_id=d.id
-		) a WHERE d.deleted_at IS NULL ORDER BY d.title,d.id`;
-	return mergeCandidates(
-		draft,
-		rows.map(({ snapshot, aliases, ...row }) => ({
-			...row,
-			id: String(row.id),
-			version: reviewVersion(snapshot),
-			aliases: aliases.flatMap((alias) => [alias.alias_title, alias.alias_slug])
-		}))
-	);
-}
-
-export function createProposal(draft, target, generated) {
-	return {
-		schemaVersion: 1,
-		id: randomUUID(),
-		generatedAt: new Date().toISOString(),
-		model: generated.model,
-		draftFingerprint: draftFingerprint(draft),
-		targetId: String(target.document.id),
-		targetTitle: target.document.title,
-		targetSlug: target.document.slug,
-		targetVersion: target.updatedVersion,
-		targetFingerprint: target.version,
-		originalContent: target.document.content,
-		...generated.result
-	};
-}
-
-export function validMergeProposal(proposal) {
-	return (
-		!!proposal &&
-		proposal.schemaVersion === 1 &&
-		typeof proposal.id === 'string' &&
-		/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(proposal.id) &&
-		validDraftId(proposal.targetId) &&
-		typeof proposal.targetVersion === 'string' &&
-		validDraftVersion(proposal.targetFingerprint) &&
-		typeof proposal.originalContent === 'string' &&
-		proposal.originalContent.length <= 200000 &&
-		typeof proposal.targetTitle === 'string' &&
-		typeof proposal.targetSlug === 'string' &&
-		validMergeResult({
-			content: proposal.content,
-			summary: proposal.summary,
-			conflicts: proposal.conflicts
-		})
-	);
-}
-
-export function reviewProposal(draft, targets) {
-	const proposal = draft.governance?.merge;
-	if (!proposal) return null;
-	if (!validMergeProposal(proposal)) return { invalid: true, stale: true };
-	const target = targets.find((target) => target.id === proposal.targetId);
-	const stale =
-		!target ||
-		target.version !== proposal.targetFingerprint ||
-		draftFingerprint(draft) !== proposal.draftFingerprint;
-	return {
-		...proposal,
-		stale,
-		diff:
-			diffLines(proposal.originalContent, proposal.content, {
-				timeout: 100,
-				maxEditLength: 10000
-			}) || null
-	};
-}
-
-// AI runs outside locks. Lock in the same order as publication, then re-read exact
-// snapshots so edits, alias changes, trash/restore and competing proposals win safely.
-export async function saveProposal(sql, draft, target, proposal) {
-	const governance = { ...draft.governance };
-	if (proposal) governance.merge = proposal;
-	else delete governance.merge;
-	const results = await sql.transaction(
-		(tx) => [
-			tx`SET LOCAL lock_timeout = '10s'`,
-			tx`LOCK TABLE documents, redirects IN SHARE ROW EXCLUSIVE MODE`,
-			tx`SELECT id FROM drafts WHERE id=${draft.id} FOR UPDATE`,
-			tx`WITH target_state AS MATERIALIZED (
-			SELECT jsonb_build_object('document',to_jsonb(d),'aliases',
-				COALESCE((SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM redirects r WHERE r.document_id=d.id),'[]'::jsonb)) AS snapshot
-			FROM documents d WHERE id=${target?.document.id || null}::bigint AND deleted_at IS NULL
-		), eligible AS MATERIALIZED (
-			SELECT id FROM drafts d WHERE id=${draft.id} AND status<>'published'
-				AND (to_jsonb(d)-'id')=${draft.snapshot}::jsonb
-				AND (${target?.document.id || null}::bigint IS NULL OR EXISTS (
-					SELECT 1 FROM target_state WHERE snapshot=${target?.snapshot || null}::jsonb
-				))
-		), changed AS (
-			UPDATE drafts SET governance=${JSON.stringify(governance)}::jsonb,updated_at=NOW()
-			WHERE id IN (SELECT id FROM eligible) RETURNING id
-		)
-		SELECT EXISTS(SELECT 1 FROM changed) AS changed,
-			1 / CASE WHEN (SELECT count(*) FROM eligible)=(SELECT count(*) FROM changed) THEN 1 ELSE 0 END AS atomic_guard`
-		],
-		{ isolationLevel: 'ReadCommitted' }
-	);
-	return results.at(-1)[0].changed;
-}
+				...draft.aliases,
+				...(draft.tags || [])
+			);
+			if (env.OPENAI_API_KEY) {
+				lease = await acquireAIRequest(
+					getClientAddress(),
+					`merge:${draft.id}:${draft.version}:${target.id}:${target.version}`
+				);
+				if (lease.error)
+					return fail(429, {
+						message:
+							lease.error === 'duplicate'
+								? '같은 통합안을 이미 생성 중입니다. 완료 후 확인해 주세요.'
+								: 'AI 요청이 많습니다. 최대 10분 후 다시 시도해 주세요.'
+					});
+			}
+			const generated = await mergeDocuments(target, draft, { signal: request.signal });
+			const plan = {
+				...generated,
+				id: randomUUID(),
+				targetId: target.id,
+				targetTitle: target.title,
+				targetSlug: target.slug,
+				targetVersion: target.version,
+				previousContent: target.content,
+				draftFingerprint: draftFingerprint(draft)
+			};
+			const rows =
+				await db()`UPDATE wv_visible_drafts SET wv_min_role=${['editor', 'reviewer', 'admin'][Math.max(['editor', 'reviewer', 'admin'].indexOf(draft.wv_min_role), ['editor', 'reviewer', 'admin'].indexOf(target.wv_min_role))]},governance=governance||${JSON.stringify({ merge: plan })}::jsonb,updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 microsecond') WHERE id=${draft.id} AND status<>'published' AND updated_at=${draft.version}::text::timestamptz RETURNING id`;
+			if (!rows.length) throw new Error('version_conflict');
+		} catch (cause) {
+			return failure(cause, values);
+		} finally {
+			if (lease?.release) await lease.release().catch(() => {});
+		}
+		redirect(303, `/drafts?open=${values.id}`);
+	},
+	discardMerge: async ({ request }) => {
+		const values = Object.fromEntries(await request.formData());
+		values.editor = actorHandle(values.editor);
+		try {
+			const rows =
+				await db()`UPDATE wv_visible_drafts SET governance=governance-'merge',updated_at=GREATEST(clock_timestamp(),updated_at+interval '1 microsecond') WHERE id=${values.id} AND status<>'published' AND updated_at=${String(values.version || '')}::text::timestamptz RETURNING id`;
+			if (!rows.length) throw new Error('version_conflict');
+		} catch (cause) {
+			return failure(cause, values);
+		}
+		redirect(303, `/drafts?open=${values.id}`);
+	},
+	applyMerge: async ({ request }) => {
+		const values = Object.fromEntries(await request.formData());
+		values.editor = actorHandle(values.editor);
+		let result;
+		if (!validHandle(values.editor) || values.reviewed !== 'yes')
+			return fail(400, {
+				...values,
+				mergeContent: values.content,
+				message: '익명 검토자 이름과 본문·상충 검토 확인이 필요합니다.'
+			});
+		if (!String(values.content || '').trim() || String(values.content).length > 200000)
+			return fail(400, {
+				...values,
+				mergeContent: values.content,
+				message: '통합 본문은 1~20만 자로 입력해 주세요.'
+			});
+		try {
+			const draft = await reviewedDraft(values);
+			const plan = draft.governance?.merge;
+			if (!plan || plan.id !== values.mergeId || plan.draftFingerprint !== draftFingerprint(draft))
+				throw new Error('version_conflict');
+			const [target] =
+				await db()`SELECT *,updated_at::text AS version FROM wv_current_documents WHERE id=${plan.targetId} AND deleted_at IS NULL AND wv_archived_at IS NULL`;
+			if (!target) throw Error('document_missing');
+			if (target.version !== plan.targetVersion) throw Error('version_conflict');
+			const aliases = await db()`SELECT alias_title FROM redirects WHERE document_id=${target.id}`;
+			const inspection = await inspectContent(
+				[
+					target.title,
+					values.content,
+					target.description,
+					target.source_name,
+					...aliases.map((a) => a.alias_title),
+					draft.source_name,
+					...draft.aliases,
+					...(draft.tags || [])
+				],
+				semanticGovernance
+			);
+			if (!inspection.passed) throw new Error('content_blocked');
+			const payload = {
+				draftId: draft.id,
+				version: draft.version,
+				mergeId: plan.id,
+				draftFingerprint: draftFingerprint(draft),
+				content: values.content,
+				editor: values.editor,
+				inspection,
+				aliases: aliasRecords([draft.title, ...draft.aliases])
+			};
+			const [row] =
+				await db()`SELECT wv_apply_draft_merge_v1(${JSON.stringify(payload)}::jsonb) AS document`;
+			result = row.document;
+		} catch (cause) {
+			return failure(cause, values);
+		}
+		redirect(303, `/wiki/${encodeURIComponent(result.slug)}`);
+	}
+};

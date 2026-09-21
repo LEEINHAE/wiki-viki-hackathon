@@ -1,126 +1,180 @@
 <script>
-	import StatusNotice from '$lib/components/StatusNotice.svelte';
+	import FormRecovery from '$lib/components/FormRecovery.svelte';
 	import { enhance } from '$app/forms';
+	import { enhanceSave } from '$lib/enhance-save.js';
+	import { canAccessRoute } from '$lib/auth-policy.js';
 	let { data, form } = $props();
-	let submitting = $state(false);
-	let transportError = $state('');
-	const slug = $derived(encodeURIComponent(data.document?.slug || data.slug));
-	const fieldsToFix = $derived([
-		...new Map((form?.governance?.fields ?? []).map(({ field, label }) => [field, label]))
-	]);
-	function submit({ cancel }) {
-		if (submitting) {
-			cancel();
-			return;
-		}
-		submitting = true;
-		transportError = '';
-		return async ({ result, update }) => {
-			try {
-				if (result.type === 'error') {
-					transportError =
-						'등록 결과를 확인하지 못했습니다. 작성한 내용을 유지했습니다. 연결과 토론 목록을 확인한 뒤 다시 시도해 주세요.';
-					return;
-				}
-				await update({ reset: result.type === 'success' });
-			} finally {
-				submitting = false;
-			}
-		};
-	}
+	let element = $state();
 </script>
 
-<svelte:head
-	><title>{data.document ? '토론: ' + data.document.title : '토론'} — Wiki Viki</title></svelte:head
->
-<main class="form-page work-page">
-	<section class="wiki-form">
-		<header class="document-header">
-			<h1>{data.document ? '토론: ' + data.document.title : '토론'}</h1>
-			<div class="document-meta">의견이 엇갈리는 내용은 편집 전에 토론해 주세요.</div>
-		</header>
-		<nav class="document-actions">
-			<a class="secondary-button" href={'/wiki/' + slug}>읽기</a>
-			<a class="secondary-button" href={'/edit/' + slug}>편집</a>
-			<a class="secondary-button" href={'/history/' + slug}>역사</a>
-		</nav>
-		{#if data.databaseError}<StatusNotice tone="error" role="alert"
-				>{data.databaseError}</StatusNotice
+<svelte:head><title>{data.document.title} · 토론 — 위키비키</title></svelte:head>
+<main class="page-shell">
+	<h1>토론: {data.document.title}</h1>
+	<nav class="button-row">
+		<a href={`/wiki/${encodeURIComponent(data.document.slug)}`}>문서 읽기</a><a
+			href={`/history/${encodeURIComponent(data.document.slug)}`}>역사</a
+		>{#if canAccessRoute(data.user?.role, '/proposals/[slug]')}<a
+				href={`/proposals/${encodeURIComponent(data.document.slug)}`}>수정 제안</a
 			>{/if}
-		{#if transportError || form?.message}
-			<StatusNotice tone="error" role="alert">
-				<p>{transportError || form.message}</p>
-				{#if !transportError && form?.governance && !form.governance.passed && !form.governance.semantic.unavailable}
-					<ul>
-						{#each [...form.governance.regex.reasons, ...form.governance.semantic.reasons] as reason}<li
-							>
-								{reason}
-							</li>{/each}
-					</ul>
-					{#each fieldsToFix as [field, label]}<p>
-							<a href={'#' + field}>{label} 수정하기</a>
-						</p>{/each}
-				{/if}
-			</StatusNotice>
-		{/if}
-		{#if form?.success && !transportError}<StatusNotice tone="success" role="status">
-				토론을 등록했습니다.
-			</StatusNotice>{/if}
-		{#if data.threads}
-			{#each data.threads as thread}
-				<article class="thread">
-					<div class="thread-head">
-						<h2>{thread.thread_title}</h2>
-						<span
-							>{thread.editor_handle} · {new Date(thread.created_at).toLocaleString('ko-KR')}</span
-						>
-					</div>
-					<div class="thread-body">{thread.body}</div>
-				</article>
-			{:else}
-				<p class="muted">아직 토론이 없습니다. 아래에서 첫 토론을 시작해 보세요.</p>
-			{/each}
-		{/if}
+	</nav>
+	{#if form?.message}<p class="notice" class:warning={!form.success} role="status">
+			{form.message}
+		</p>{/if}
+	<form method="GET" class="search-filters">
+		<label
+			>상태<select name="status" value={data.status}
+				><option value="">전체</option><option value="open">진행 중</option><option value="resolved"
+					>해결됨</option
+				></select
+			></label
+		><button class="secondary-button">적용</button>
+	</form>
+	<section class="card">
+		<h2>토론 목록</h2>
+		{#each data.threads as thread}<article class="search-result">
+				<h3>
+					<a href={`?thread=${thread.id}&status=${data.status}&page=${data.page}`}
+						>{thread.thread_title}</a
+					>
+				</h3>
+				<p>
+					{thread.status === 'resolved' ? '해결됨' : '진행 중'} · {thread.editor_handle} · 답글 {thread.replies}개
+				</p>
+			</article>{:else}<p>현재 조건에 맞는 토론이 없습니다.</p>{/each}
+		<nav class="pagination" aria-label="토론 목록 페이지">
+			{#if data.page > 1}<a href={`?status=${data.status}&page=${data.page - 1}`}>이전</a>{/if}<span
+				>{data.page}페이지</span
+			>{#if data.page * 20 < data.total}<a href={`?status=${data.status}&page=${data.page + 1}`}
+					>다음</a
+				>{/if}
+		</nav>
+	</section>
+	{#if data.selected}<section
+			class="card discussion-detail"
+			id={`thread-${data.selected.id}`}
+			tabindex="-1"
+		>
+			<h2>{data.selected.thread_title}</h2>
+			<p>
+				{data.selected.editor_handle} · {new Date(data.selected.created_at).toLocaleString('ko-KR')} ·
+				{data.selected.status === 'resolved' ? '해결됨' : '진행 중'}
+			</p>
+			<div class="thread-body">{data.selected.body}</div>
+			{#if data.selected.paragraph_anchor}<a
+					href={`/wiki/${encodeURIComponent(data.document.slug)}${data.selected.target_revision_id ? `?revision=${data.selected.target_revision_id}` : ''}#${encodeURIComponent(data.selected.paragraph_anchor)}`}
+					>토론 대상 문단</a
+				>{/if}
+			{#if data.selected.resolution_revision_id}<p>
+					<a
+						href={`/wiki/${encodeURIComponent(data.document.slug)}?revision=${data.selected.resolution_revision_id}`}
+						>해결에 연결된 리비전 #{data.selected.resolution_revision_id}</a
+					>
+				</p>{/if}
+			{#if canAccessRoute(data.user?.role, '/proposals/[slug]')}<p>
+					<a
+						href={`/proposals/${encodeURIComponent(data.document.slug)}?thread=${data.selected.id}`}
+						>이 토론에서 수정 제안 만들기</a
+					>
+				</p>{/if}
+			<h3>답글</h3>
+			{#each data.replies as reply}<article class="thread">
+					<p>{reply.handle} · {new Date(reply.created_at).toLocaleString('ko-KR')}</p>
+					<div class="thread-body">{reply.body}</div>
+				</article>{:else}<p>아직 답글이 없습니다.</p>{/each}
+			<nav class="pagination" aria-label="답글 페이지">
+				{#if data.replyPage > 1}<a
+						href={`?thread=${data.selected.id}&replies=${data.replyPage - 1}`}>이전 답글</a
+					>{/if}{#if data.replyPage * 30 < data.replyTotal}<a
+						href={`?thread=${data.selected.id}&replies=${data.replyPage + 1}`}>다음 답글</a
+					>{/if}
+			</nav>
+			{#if data.user && data.selected.status === 'open'}<form
+					method="POST"
+					action={`?thread=${data.selected.id}`}
+				>
+					<input type="hidden" name="intent" value="reply" /><input
+						type="hidden"
+						name="threadId"
+						value={data.selected.id}
+					/><label
+						>답글<textarea name="body" rows="3" maxlength="20000" required
+							>{form?.intent === 'reply' && !form.success ? form.body : ''}</textarea
+						></label
+					><button class="primary-button">답글 등록</button>
+				</form>{/if}
+			{#if data.canResolve}<form method="POST" action={`?thread=${data.selected.id}`} class="card">
+					<input type="hidden" name="intent" value="resolve" /><input
+						type="hidden"
+						name="threadId"
+						value={data.selected.id}
+					/><input type="hidden" name="version" value={data.selected.version} /><input
+						type="hidden"
+						name="status"
+						value={data.selected.status === 'open' ? 'resolved' : 'open'}
+					/><label
+						>실제 수정 리비전 · 선택<select
+							name="revisionId"
+							value={data.selected.resolution_revision_id || ''}
+							><option value="">연결할 수정 없음</option>{#each data.revisions as revision}<option
+									value={revision.id}>#{revision.id} · {revision.summary}</option
+								>{/each}</select
+						></label
+					><button class="secondary-button"
+						>{data.selected.status === 'open' ? '해결됨으로 표시' : '다시 열기'}</button
+					>
+				</form>{/if}
+		</section>{/if}
+	<section class="card">
 		<h2>새 토론 시작</h2>
-		{#if !data.semanticAvailable || form?.semanticSkipped}
-			<StatusNotice tone="warning" role="status">
-				AI 의미 기반 검사는 실행되지 않습니다. 기본 콘텐츠 보호 검사만 적용되므로 주제·의견을 직접
-				검토한 뒤 등록해 주세요.
-			</StatusNotice>
-		{/if}
-		<form method="POST" use:enhance={submit} aria-busy={submitting}>
+		<form method="POST" bind:this={element} use:enhance={enhanceSave}>
+			<FormRecovery
+				{element}
+				storageKey={`discussion:${data.document.id}`}
+				kind="discussion"
+				resources={[{ type: 'document', id: data.document.id }]}
+			/><input type="hidden" name="intent" value="create" /><input
+				type="hidden"
+				name="version"
+				value={data.document.version}
+			/>
 			<div class="field">
 				<label for="title">주제</label><input
 					id="title"
 					name="title"
-					value={form?.title ?? ''}
+					maxlength="200"
+					value={form?.intent === 'create' && !form.success ? form.title : ''}
 					required
-					disabled={submitting}
 				/>
 			</div>
 			<div class="field">
 				<label for="body">의견</label><textarea
 					id="body"
 					name="body"
-					style="min-height:130px"
-					required
-					disabled={submitting}>{form?.body ?? ''}</textarea
+					rows="5"
+					maxlength="20000"
+					required>{form?.intent === 'create' && !form.success ? form.body : ''}</textarea
 				>
 			</div>
-			<div class="field">
-				<label for="editor">익명 사용자 이름</label><input
-					id="editor"
+			<label
+				>대상 문단<select name="anchor"
+					><option value="">문서 전체</option>{#each data.toc as heading}<option value={heading.id}
+							>{heading.number} {heading.title}</option
+						>{/each}</select
+				></label
+			><label
+				>작성자<input
 					name="editor"
-					value={form?.editor ?? 'Editor-01'}
+					value={data.user?.handle || 'Editor-01'}
+					readonly={!!data.user}
 					required
-					disabled={submitting}
-				/>
-			</div>
-			<div class="button-row">
-				<button class="primary-button" disabled={submitting || !!data.databaseError}
-					>{submitting ? '검사 후 등록 중…' : '토론 등록'}</button
-				>
-			</div>
+				/></label
+			><button class="primary-button">토론 등록</button>
 		</form>
 	</section>
 </main>
+
+<style>
+	.discussion-detail {
+		scroll-margin-top: 100px;
+	}
+</style>

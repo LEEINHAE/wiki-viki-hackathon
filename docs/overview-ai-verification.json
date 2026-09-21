@@ -1,0 +1,23 @@
+{
+	"measuredAt": "2026-09-21T13:41:31.072Z",
+	"environment": "Real OpenAI; synthetic source; no document publication",
+	"modelRequested": "gpt-5-mini",
+	"elapsedMs": 21649,
+	"documents": [
+		{
+			"title": "파랑카드(대여 표시)",
+			"firstSection": {
+				"heading": "개요",
+				"content": "파랑카드는 가상 학습 도구의 대여 상태를 표시하기 위한 도구입니다. 이 자료는 합성 기능 검증 자료의 일부로 실제 업무 절차가 아니며, 빌릴 때 도구 이름을 기록하고 도구와 함께 두며 반납 시 카드와 도구를 파란 보관함에 넣는 방식으로 사용됩니다."
+			}
+		},
+		{
+			"title": "초록점검표(사용 준비 확인)",
+			"firstSection": {
+				"heading": "개요",
+				"content": "초록점검표는 가상 학습 도구의 사용 준비를 확인하기 위한 점검표입니다. 이 자료는 합성 기능 검증 자료의 일부로 실제 업무 절차가 아니며, 사용 전에 도구 개수와 부속품을 확인하고 완료 표시를 하도록 되어 있습니다."
+			}
+		}
+	],
+	"passed": true
+}

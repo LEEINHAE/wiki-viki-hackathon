@@ -1,0 +1,10 @@
+{
+	"measuredAt": "2026-09-21T13:41:56.628Z",
+	"environment": "Remote Neon, isolated schema, migrations 001–025",
+	"checks": [
+		"Empty state, normalized query aggregation, repeat deduplication and count ranking",
+		"Current and historical access, archived and deleted result exclusion",
+		"One-hour expiry and pruning, top-ten limit, 20-event visitor limit per five-minute bucket"
+	],
+	"passed": true
+}

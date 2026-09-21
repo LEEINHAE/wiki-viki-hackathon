@@ -1,0 +1,70 @@
+{
+	"measuredAt": "2026-09-21T13:09:09.984Z",
+	"environment": "Authenticated reader, local Vite dev + remote Neon, isolated schema; not production, Node v24.19.0",
+	"corpus": {
+		"documents": 1000,
+		"characters": "478661"
+	},
+	"queries": ["RFCC", "CDU", "정비 요청", "산단 스팀", "벤치마크 문서 12", "없는검증문서"],
+	"samples": 60,
+	"firstRequestMs": 755.29,
+	"p50Ms": 289.05,
+	"p95Ms": 430.44,
+	"maxMs": 755.29,
+	"timesMs": [
+		755.29, 253.73, 250.41, 287.05, 283.79, 256.14, 430.44, 262.39, 311.62, 346.44, 309.06, 304.86,
+		305.53, 310.54, 281.75, 276.91, 361.04, 322.71, 599.16, 271.68, 268.1, 268.21, 424.89, 301.73,
+		310.83, 276.7, 247.39, 272.3, 430.39, 262.63, 352.96, 299.26, 261.82, 290.26, 310.36, 268.73,
+		463.7, 250.89, 308.55, 338.94, 289.05, 292.59, 307.88, 310.84, 307.48, 306.23, 272.17, 272.38,
+		380.86, 256.64, 254.74, 409.47, 263.75, 271.81, 382.94, 280.36, 249.85, 288.04, 262.36, 249.21
+	],
+	"explain": [
+		{
+			"Plan": {
+				"Node Type": "Result",
+				"Parallel Aware": false,
+				"Async Capable": false,
+				"Startup Cost": 0,
+				"Total Cost": 0.26,
+				"Plan Rows": 1,
+				"Plan Width": 32,
+				"Actual Startup Time": 48.006,
+				"Actual Total Time": 48.009,
+				"Actual Rows": 1,
+				"Actual Loops": 1,
+				"Disabled": false,
+				"Shared Hit Blocks": 9621,
+				"Shared Read Blocks": 0,
+				"Shared Dirtied Blocks": 0,
+				"Shared Written Blocks": 0,
+				"Local Hit Blocks": 0,
+				"Local Read Blocks": 0,
+				"Local Dirtied Blocks": 0,
+				"Local Written Blocks": 0,
+				"Temp Read Blocks": 0,
+				"Temp Written Blocks": 0
+			},
+			"Planning": {
+				"Shared Hit Blocks": 154,
+				"Shared Read Blocks": 0,
+				"Shared Dirtied Blocks": 0,
+				"Shared Written Blocks": 0,
+				"Local Hit Blocks": 0,
+				"Local Read Blocks": 0,
+				"Local Dirtied Blocks": 0,
+				"Local Written Blocks": 0,
+				"Temp Read Blocks": 0,
+				"Temp Written Blocks": 0
+			},
+			"Planning Time": 0.917,
+			"Triggers": [],
+			"Execution Time": 48.029
+		}
+	],
+	"notes": [
+		"No external AI calls",
+		"Includes a database-backed session lookup and current plus historical access rules",
+		"30 Korean/alias fixtures plus synthetic filler up to 1,000 documents",
+		"Sequential HTTP API requests, serverless production cold start and user usability unmeasured"
+	]
+}

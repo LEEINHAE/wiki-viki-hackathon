@@ -1,67 +1,65 @@
 <script>
-	import { setContext } from 'svelte';
+	import { setContext, onDestroy } from 'svelte';
 	import { afterNavigate } from '$app/navigation';
+	import { page } from '$app/state';
+	import { permits } from '$lib/auth-policy.js';
 	import favicon from '$lib/assets/favicon.svg';
 	import Header from '$lib/components/Header.svelte';
-	import WikifyForm from '$lib/components/WikifyForm.svelte';
-	import Icon from '$lib/components/Icon.svelte';
+	import Wikifier from '$lib/components/Wikifier.svelte';
 	import '../app.css';
 	let { children } = $props();
-	let pointerDownOutside = false;
-	let dialog;
-	let wikifierStarted = $state(false);
-	setContext('open-wikifier', () => {
-		wikifierStarted = true;
-		dialog.showModal();
-	});
-	function close() {
+	const canEdit = $derived(page.data.demo || permits(page.data.user?.role, 'editor'));
+	let dialog = $state();
+	let previousOverflow = '';
+	function openWikifier() {
+		previousOverflow = document.body.style.overflow;
+		document.body.style.overflow = 'hidden';
+		dialog?.showModal();
+	}
+	function closeWikifier() {
 		dialog?.close();
 	}
-	function isBackdrop(event) {
-		if (event.target !== dialog) return false;
-		const { left, right, top, bottom } = dialog.getBoundingClientRect();
-		return (
-			event.clientX < left || event.clientX > right || event.clientY < top || event.clientY > bottom
-		);
+	function releaseScroll() {
+		if (typeof document !== 'undefined') document.body.style.overflow = previousOverflow;
 	}
-	afterNavigate(close);
+	afterNavigate(closeWikifier);
+	onDestroy(releaseScroll);
+	setContext('openWikifier', openWikifier);
 </script>
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
-<a class="skip-link" href="#main-content">본문으로 바로가기</a>
-<Header />
-<div id="main-content">{@render children()}</div>
+<a class="skip-link" href="#main-content">본문 바로가기</a>
+<Header onwikify={openWikifier} />
+<div id="main-content" tabindex="-1">{@render children()}</div>
 <footer class="site-footer">
-	<div><span class="footer-brand">W</span><span>함께 기록하고, 연결하고, 성장하는 지식.</span></div>
 	<div>
-		<a href="/wiki/wiki-viki:basic-policy">이용 원칙</a><a href="/wiki/wiki-viki:help">도움말</a
-		><span>Wiki Viki © {new Date().getFullYear()}</span>
+		<p>본 위키는 사내 전용이며 외부 반출을 금지합니다.</p>
+		<p>문의: 사내 협업툴 #wikibiki-support 채널</p>
+		<div class="footer-links">
+			<a href="/wiki/wiki-viki:basic-policy">이용 원칙</a><a href="/wiki/wiki-viki:help">도움말</a
+			>{#if canEdit}<a href="/edit/새-문서">새 문서 작성</a>{/if}
+			{#if page.data.demo || page.data.user?.role === 'admin'}<a href="/trash">휴지통</a>{/if}
+		</div>
 	</div>
 </footer>
-<dialog
-	bind:this={dialog}
-	class="wikifier-dialog"
-	aria-label="AI 위키파이어"
-	onpointerdown={(event) => {
-		pointerDownOutside = isBackdrop(event);
-	}}
-	onpointercancel={() => (pointerDownOutside = false)}
-	onpointerup={(event) => {
-		const pointerUpOutside = isBackdrop(event);
-
-		if (pointerDownOutside && pointerUpOutside) {
-			close();
-		}
-
-		pointerDownOutside = false;
-	}}
->
-	<div class="dialog-toolbar">
-		<button class="modal-close theme-button" aria-label="위키파이어 닫기" onclick={close}
-			><Icon name="close" /></button
-		>
-	</div>
-	<div class="dialog-inner">
-		{#if wikifierStarted}<WikifyForm oncomplete={close} inModal />{/if}
-	</div>
-</dialog>
+{#if canEdit}<dialog
+		class="modal"
+		bind:this={dialog}
+		aria-label="AI 위키파이어"
+		onclick={(event) => {
+			if (event.target === dialog) {
+				const rect = dialog.getBoundingClientRect();
+				if (
+					event.clientX < rect.left ||
+					event.clientX > rect.right ||
+					event.clientY < rect.top ||
+					event.clientY > rect.bottom
+				)
+					closeWikifier();
+			}
+		}}
+		onclose={releaseScroll}
+	>
+		<Wikifier onclose={closeWikifier} />
+	</dialog>
+{/if}
