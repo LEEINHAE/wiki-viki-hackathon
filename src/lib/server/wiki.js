@@ -1,14 +1,8 @@
 import { db } from './db.js';
 import { marked } from 'marked';
 
-export function slugify(value) {
-	return value
-		.trim()
-		.replace(/[\s_]+/g, '-')
-		.replace(/[^\p{L}\p{N}:.~-]/gu, '')
-		.replace(/-+/g, '-')
-		.toLowerCase();
-}
+import { slugify, linkTerms } from '$lib/knowledge.js';
+export { slugify };
 
 function escapeHtml(value) {
 	return String(value)
@@ -60,7 +54,7 @@ export async function recentChanges(limit = 12) {
 	return db()`SELECT slug, title, editor_handle, updated_at FROM documents ORDER BY updated_at DESC LIMIT ${limit}`;
 }
 
-export async function renderWiki(content) {
+export async function renderWiki(content, draftDocuments = []) {
 	const sql = db();
 	const names = [...content.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g)].map((match) =>
 		match[1].trim()
@@ -83,6 +77,8 @@ export async function renderWiki(content) {
 	});
 	source = source.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, label) => {
 		const slug = slugify(target);
+		const draft = !known.has(slug) && draftDocuments.find((doc) => doc.slug === slug);
+		if (draft) return `[${label || target}](/drafts?open=${draft.id} "wikilink:draft")`;
 		return `[${label || target}](/wiki/${encodeURIComponent(slug)} "wikilink:${known.has(slug) ? 'exists' : 'missing'}")`;
 	});
 	source = source.replace(
@@ -92,10 +88,10 @@ export async function renderWiki(content) {
 	const renderer = new marked.Renderer();
 	let headingIndex = 0;
 	renderer.heading = ({ tokens, depth }) =>
-		`<h${depth} id="section-${++headingIndex}">${marked.parser(tokens)}</h${depth}>`;
+		`<h${depth} id="section-${++headingIndex}">${renderer.parser.parseInline(tokens)}</h${depth}>`;
 	renderer.html = ({ text }) => escapeHtml(text);
 	renderer.link = ({ href, title, tokens }) => {
-		const label = marked.parser(tokens);
+		const label = renderer.parser.parseInline(tokens);
 		const state = title?.startsWith('wikilink:') ? title.slice(9) : null;
 		const safeHref = /^(?:https?:|mailto:|\/|#)/i.test(href) ? escapeHtml(href) : '#';
 		return `<a href="${safeHref}"${state ? ` class="wiki-link ${state === 'missing' ? 'missing' : ''}"` : ''}>${label}</a>`;
@@ -110,26 +106,16 @@ export async function renderWiki(content) {
 	return html;
 }
 
-export async function autoLinkDocument(content, suggestions = []) {
+export async function autoLinkDocument(content, suggestions = [], draftTitles = []) {
 	const terms = [
-		...new Set(suggestions.map((term) => term.trim()).filter((term) => term.length > 2))
+		...new Set(suggestions.map((term) => term.trim()).filter((term) => term.length > 1))
 	].slice(0, 20);
-	if (!terms.length) return content;
 	const sql = db();
-	// const rows =
-	// 	await sql`SELECT title FROM documents WHERE LOWER(title) IN ${sql(terms.map((term) => term.toLowerCase()))}`;
 	const lowerTerms = terms.map((term) => term.toLowerCase());
-	const rows = await sql`SELECT title FROM documents WHERE LOWER(title) = ANY(${lowerTerms})`;
-	let linked = content;
-	for (const { title } of rows) {
-		if (linked.includes(`[[${title}`)) continue;
-		const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-		linked = linked.replace(
-			new RegExp(`(?<!\\[\\[)\\b${escaped}\\b(?![^[]*\\]\\])`, 'u'),
-			`[[${title}]]`
-		);
-	}
-	return linked;
+	const rows = terms.length
+		? await sql`SELECT title FROM documents WHERE LOWER(title) = ANY(${lowerTerms})`
+		: [];
+	return linkTerms(content, [...rows.map((row) => row.title), ...draftTitles]);
 }
 
 export function buildToc(content) {

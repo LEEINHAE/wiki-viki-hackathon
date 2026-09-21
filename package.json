@@ -7,10 +7,12 @@
 		"dev": "vite dev",
 		"build": "vite build",
 		"preview": "vite preview",
+		"test": "node --test tests/*.test.js",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
 		"migrate": "bun run scripts/migrate.js",
 		"seed": "bun run scripts/seed.js",
 		"seed:demo": "bun run scripts/seed-demo.js",
+		"seed:prototype": "bun run scripts/seed-prototype.js",
 		"prepare": "svelte-kit sync || echo ''",
 		"lint": "prettier --check .",
 		"format": "prettier --write ."
@@ -27,11 +29,14 @@
 	},
 	"dependencies": {
 		"@neondatabase/serverless": "^1.1.0",
+		"@xmldom/xmldom": "^0.8.15",
 		"diff": "^9.0.0",
+		"jszip": "^3.10.2",
 		"mammoth": "^1.12.2",
 		"marked": "^18.0.11",
 		"openai": "^7.8.0",
 		"pdf-parse": "^2.4.5",
-		"postgres": "^3.4.9"
+		"postgres": "^3.4.9",
+		"read-excel-file": "^9.3.10"
 	}
 }
