@@ -33,18 +33,24 @@ export async function saveDocument({
 	content,
 	editor = 'Editor-01',
 	summary = '',
-	originalSlug
+	originalSlug,
+	field = null,
+	description = null,
+	sourceName = null
 }) {
 	const sql = db();
 	const slug = originalSlug || slugify(title);
 	const [doc] = await sql`
 		WITH upserted AS (
-			INSERT INTO documents (slug, title, content, editor_handle)
-			VALUES (${slug}, ${title}, ${content}, ${editor})
+			INSERT INTO documents (slug, title, content, editor_handle, field, description, source_name)
+			VALUES (${slug}, ${title}, ${content}, ${editor}, COALESCE(${field}, '일반'), COALESCE(${description}, ''), COALESCE(${sourceName}, ''))
 			ON CONFLICT (slug) DO UPDATE SET
 				title = EXCLUDED.title,
 				content = EXCLUDED.content,
 				editor_handle = EXCLUDED.editor_handle,
+				field = COALESCE(${field}, documents.field),
+				description = COALESCE(${description}, documents.description),
+				source_name = COALESCE(${sourceName}, documents.source_name),
 				updated_at = NOW()
 			RETURNING *
 		), inserted_revision AS (
@@ -66,6 +72,7 @@ export async function renderWiki(content) {
 		match[1].trim()
 	);
 	let known = new Set();
+	let pending = new Map();
 	if (names.length) {
 		const slugs = names.map(slugify);
 		// const rows = await sql`SELECT slug FROM documents WHERE slug IN ${sql(slugs)} UNION SELECT alias_slug AS slug FROM redirects WHERE alias_slug IN ${sql(slugs)}`;
@@ -75,6 +82,9 @@ export async function renderWiki(content) {
       SELECT alias_slug AS slug FROM redirects WHERE alias_slug = ANY(${slugs})
     `;
 		known = new Set(rows.map((row) => row.slug));
+		const drafts =
+			await sql`SELECT id,slug FROM drafts WHERE slug=ANY(${slugs}) AND status <> 'published' ORDER BY created_at`;
+		pending = new Map(drafts.map((row) => [row.slug, row.id]));
 	}
 	const footnotes = new Map();
 	let source = content.replace(/^\[\^([^\]]+)\]:\s*(.+)$/gm, (_, id, note) => {
@@ -82,7 +92,10 @@ export async function renderWiki(content) {
 		return '';
 	});
 	source = source.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, label) => {
+		if (/^https?:\/\//i.test(target)) return `[${label || target}](${target})`;
 		const slug = slugify(target);
+		if (!known.has(slug) && pending.has(slug))
+			return `[${label || target}](/drafts?open=${pending.get(slug)} "wikilink:draft")`;
 		return `[${label || target}](/wiki/${encodeURIComponent(slug)} "wikilink:${known.has(slug) ? 'exists' : 'missing'}")`;
 	});
 	source = source.replace(
@@ -92,10 +105,10 @@ export async function renderWiki(content) {
 	const renderer = new marked.Renderer();
 	let headingIndex = 0;
 	renderer.heading = ({ tokens, depth }) =>
-		`<h${depth} id="section-${++headingIndex}">${marked.parser(tokens)}</h${depth}>`;
+		`<h${depth} id="section-${++headingIndex}">${renderer.parser.parseInline(tokens)}</h${depth}>`;
 	renderer.html = ({ text }) => escapeHtml(text);
 	renderer.link = ({ href, title, tokens }) => {
-		const label = marked.parser(tokens);
+		const label = renderer.parser.parseInline(tokens);
 		const state = title?.startsWith('wikilink:') ? title.slice(9) : null;
 		const safeHref = /^(?:https?:|mailto:|\/|#)/i.test(href) ? escapeHtml(href) : '#';
 		return `<a href="${safeHref}"${state ? ` class="wiki-link ${state === 'missing' ? 'missing' : ''}"` : ''}>${label}</a>`;

@@ -1,16 +1,32 @@
 import { error } from '@sveltejs/kit';
 import { db } from '$lib/server/db.js';
-import { getDocument, recentChanges, renderWiki, buildToc } from '$lib/server/wiki.js';
+import { getDocument, renderWiki, buildToc } from '$lib/server/wiki.js';
+import { getCatalog } from '$lib/server/catalog.js';
 
 export async function load({ params }) {
 	let result;
-	try { result = await getDocument(params.slug); } catch (cause) { error(503, `데이터베이스를 사용할 수 없습니다: ${cause.message}`); }
-	if (!result) return { missing: true, slug: params.slug, changes: await recentChanges() };
+	try {
+		result = await getDocument(params.slug);
+	} catch {
+		error(503, '문서를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+	}
+	if (!result) return { missing: true, slug: params.slug };
 	const { document, redirectedFrom } = result;
 	const sql = db();
-	const [html, changes, backlinks] = await Promise.all([
-		renderWiki(document.content), recentChanges(),
-		sql`SELECT slug,title FROM documents WHERE id <> ${document.id} AND content ILIKE ${'%[[' + document.title + '%'} ORDER BY title LIMIT 50`
+	const [html, catalog, threads, contributors] = await Promise.all([
+		renderWiki(document.content),
+		getCatalog(),
+		sql`SELECT count(*) AS count FROM discussions WHERE document_id=${document.id}`,
+		sql`SELECT count(DISTINCT editor_handle) AS count FROM revisions WHERE document_id=${document.id}`
 	]);
-	return { missing: false, document, redirectedFrom, html, toc: buildToc(document.content), changes, backlinks };
+	const enriched = catalog.documents.find((doc) => doc.slug === document.slug);
+	return {
+		missing: false,
+		document: enriched,
+		redirectedFrom,
+		html,
+		toc: buildToc(document.content),
+		threads: Number(threads[0].count),
+		contributors: Number(contributors[0].count)
+	};
 }

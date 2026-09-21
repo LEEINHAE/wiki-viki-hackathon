@@ -1,38 +1,36 @@
 <script>
-	let query = $state('');
-	let dark = $state(false);
-	function search(event) {
-		event.preventDefault();
-		if (query.trim()) location.href = `/?q=${encodeURIComponent(query.trim())}`;
-	}
-	function toggleTheme() {
-		dark = !dark;
-		document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-		localStorage.setItem('wiki-theme', dark ? 'dark' : 'light');
-	}
+	import { page } from '$app/state';
+	import SearchBox from './SearchBox.svelte';
+	let { onwikify } = $props();
+	let menu = $state(false);
+	const home = $derived(page.url.pathname === '/' && !page.url.searchParams.has('q'));
 </script>
 
-<svelte:window
-	on:load={() => {
-		dark = localStorage.getItem('wiki-theme') === 'dark';
-		document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-	}}
-/>
 <header class="topbar">
 	<div class="nav-wrap">
-		<a class="brand" href="/"><span class="brand-mark">W</span><span>Wiki Viki</span></a>
-		<nav aria-label="주요 메뉴">
-			<a href="/wiki/wiki-viki:최근-변경">최근 변경</a><a href="/wikify">AI 위키 변환</a><a
-				href="/drafts">검토 대기 초안</a
+		<a class="brand" href="/" aria-label="위키비키 홈"
+			><span class="brand-mark">W</span><span>위키비키</span></a
+		>
+		<nav class:expanded={menu} aria-label="주요 메뉴">
+			<a href="/recent" onclick={() => (menu = false)}>최근 변경</a>
+			<a
+				href="/wikify"
+				onclick={(event) => {
+					event.preventDefault();
+					menu = false;
+					onwikify();
+				}}>AI 위키파이어</a
 			>
+			<a href="/drafts" onclick={() => (menu = false)}>초안 검토</a>
 		</nav>
-		<form class="nav-search" onsubmit={search}>
-			<input bind:value={query} aria-label="Wiki Viki 문서 검색" placeholder="검색" /><button
-				aria-label="검색">⌕</button
-			>
-		</form>
-		<button class="theme-button" onclick={toggleTheme} aria-label="다크 모드 전환"
-			>{dark ? '☀' : '☾'}</button
+		<div class="nav-spacer"></div>
+		{#if !home}<SearchBox compact initial={page.url.searchParams.get('q') || ''} {onwikify} />{/if}
+		<div class="identity" title="익명 편집자"><span>07</span><b>Operator-07</b></div>
+		<button
+			class="mobile-menu"
+			onclick={() => (menu = !menu)}
+			aria-expanded={menu}
+			aria-label="메뉴 열기">☰</button
 		>
 	</div>
 </header>

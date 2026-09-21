@@ -13,7 +13,9 @@
 		"seed:demo": "bun run scripts/seed-demo.js",
 		"prepare": "svelte-kit sync || echo ''",
 		"lint": "prettier --check .",
-		"format": "prettier --write ."
+		"format": "prettier --write .",
+		"test": "node --test tests/*.test.js",
+		"test:integration": "node scripts/verify-prototype.js"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-vercel": "^6.3.4",
@@ -32,6 +34,7 @@
 		"marked": "^18.0.11",
 		"openai": "^7.8.0",
 		"pdf-parse": "^2.4.5",
-		"postgres": "^3.4.9"
+		"postgres": "^3.4.9",
+		"jszip": "^3.10.1"
 	}
 }

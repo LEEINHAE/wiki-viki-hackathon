@@ -22,5 +22,5 @@ export function regexGovernance(text) {
 }
 
 export function validHandle(value) {
-	return /^(?:Editor-\d{2,}|Operator-[A-Z][A-Z0-9-]*)$/.test(value || '');
+	return /^(?:Editor-\d{2,}|Operator-(?:\d{2,}|[A-Z][A-Z0-9-]*))$/.test(value || '');
 }
