@@ -40,9 +40,12 @@
 		if (event.target === dialog) close();
 	}}
 >
-	<div class="dialog-inner">
+	<div class="dialog-header">
 		<button class="modal-close theme-button" aria-label="위키파이어 닫기" onclick={close}
 			><Icon name="close" /></button
-		>{#if modalOpen}<WikifyForm oncomplete={close} />{/if}
+		>
+	</div>
+	<div class="dialog-inner">
+		{#if modalOpen}<WikifyForm oncomplete={close} />{/if}
 	</div>
 </dialog>

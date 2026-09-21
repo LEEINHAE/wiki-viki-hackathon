@@ -8,7 +8,7 @@ export async function load({ params, url }) {
 	if (!result) error(404, '문서를 찾을 수 없습니다.');
 	const sql = db();
 	const revisions =
-		await sql`SELECT id,editor_handle,summary,created_at,content FROM revisions WHERE document_id=${result.document.id} ORDER BY created_at DESC`;
+		await sql`SELECT id,editor_handle,summary,created_at,content FROM revisions WHERE document_id=${result.document.id} ORDER BY created_at DESC,id DESC`;
 	const selected = Number(url.searchParams.get('diff'));
 	let changes = [];
 	if (selected) {

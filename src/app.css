@@ -1609,25 +1609,42 @@ small,
 	width: calc(100% - 32px);
 	padding: 0;
 	max-height: 90vh;
+	max-height: 90dvh;
 	border: 1px solid var(--line);
 	border-radius: 28px;
 	background: var(--paper);
 	color: var(--text);
 	box-shadow: 0 20px 80px #201e1d40;
-	overflow: auto;
+	overflow: hidden;
+}
+.wikifier-dialog[open] {
+	display: flex;
+	flex-direction: column;
+}
+body:has(.wikifier-dialog[open]) {
+	overflow: hidden;
 }
 .wikifier-dialog::backdrop {
 	background: #201e1d66;
 	backdrop-filter: blur(5px);
 }
-.dialog-inner {
-	position: relative;
-	padding: 36px;
+.dialog-header {
+	display: flex;
+	justify-content: flex-end;
+	flex-shrink: 0;
+	padding: 12px 18px 6px;
 }
 .modal-close {
-	position: absolute;
-	right: 20px;
-	top: 17px;
+	flex-shrink: 0;
+}
+.dialog-inner {
+	min-height: 0;
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+	scrollbar-color: var(--muted) transparent;
+	margin: 0 8px 12px;
+	padding: 0 28px 24px;
 }
 .wikifier-intro h1 {
 	font-size: 30px;
@@ -2242,10 +2259,11 @@ small,
 	.wikifier-dialog {
 		width: calc(100% - 20px);
 		max-height: 94vh;
+		max-height: 94dvh;
 		border-radius: 23px;
 	}
 	.dialog-inner {
-		padding: 28px 22px;
+		padding: 0 14px 16px;
 	}
 	.wikifier-intro h1 {
 		font-size: 25px;

@@ -2,9 +2,11 @@
 	import { enhance } from '$app/forms';
 	import { formatDate } from '$lib/knowledge.js';
 	import { page } from '$app/state';
+	import DraftMergePanel from '$lib/components/DraftMergePanel.svelte';
 	let { data, form } = $props();
 	let filter = $state('all');
 	let saving = $state(false);
+	let busyAction = $state('');
 	let dirty = $state(false);
 	let preview = $state(false);
 	let actionError = $state('');
@@ -17,16 +19,20 @@
 		preview = false;
 		actionError = '';
 	});
-	function submitAction() {
+	function submitAction({ formElement }) {
 		saving = true;
+		busyAction = new URL(formElement.action).search.slice(2);
 		actionError = '';
 		return async ({ result, update }) => {
-			saving = false;
 			if (result.type === 'error') {
+				saving = false;
+				busyAction = '';
 				actionError = '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.';
 				return;
 			}
-			await update();
+			await update({ reset: false });
+			saving = false;
+			busyAction = '';
 			if (result.type !== 'failure') dirty = false;
 		};
 	}
@@ -73,6 +79,13 @@
 							>{/each}
 					</div>
 				</div>{/if}
+			{#key data.selected.id}<DraftMergePanel
+					{data}
+					{saving}
+					{dirty}
+					{busyAction}
+					{submitAction}
+				/>{/key}
 			<div class="draft-tabs">
 				<button class="secondary-button" onclick={() => (preview = false)} aria-pressed={!preview}
 					>내용 수정</button
@@ -92,17 +105,22 @@
 				oninput={() => (dirty = true)}
 			>
 				<input type="hidden" name="id" value={data.selected.id} />
+				<input type="hidden" name="version" value={data.selected.version} />
 				<div class="field">
 					<label for="title">문서 제목</label><input
 						id="title"
 						name="title"
 						value={data.selected.title}
+						disabled={saving}
 						required
 					/>
 				</div>
 				<div class="field">
-					<label for="content">위키 본문</label><textarea id="content" name="content" required
-						>{data.selected.content}</textarea
+					<label for="content">위키 본문</label><textarea
+						id="content"
+						name="content"
+						required
+						disabled={saving}>{data.selected.content}</textarea
 					><small>[[문서 이름]]으로 다른 지식을 연결할 수 있습니다.</small>
 				</div>
 				<div class="field">
@@ -110,13 +128,14 @@
 						id="editor"
 						name="editor"
 						value={data.selected.editor_handle}
+						disabled={saving}
 						pattern={'(?:Editor-[0-9]{2,}|Operator-[A-Z][A-Z0-9\\-]*)'}
 						required
 					/>
 				</div>
 				<div class="button-row">
 					<button class="secondary-button" disabled={saving}
-						>{saving ? '저장 중…' : '검토 내용 저장'}</button
+						>{busyAction === 'update' ? '저장 중…' : '검토 내용 저장'}</button
 					>
 				</div>
 			</form>
@@ -136,16 +155,22 @@
 							class="danger-button"
 							disabled={saving}>초안 삭제</button
 						>
+						<input type="hidden" name="version" value={data.selected.version} />
 					</form>
 					<form method="POST" action="?/publish" use:enhance={submitAction}>
+						<input type="hidden" name="version" value={data.selected.version} />
 						<input type="hidden" name="id" value={data.selected.id} /><button
 							class="primary-button"
-							disabled={saving || dirty || data.selected.status === 'blocked'}
-							>검토 완료 · 문서 게시</button
+							disabled={saving || dirty || data.duplicate || data.selected.status === 'blocked'}
+							>{busyAction === 'publish' ? '검사 후 게시 중…' : '검토 완료 · 새 문서 게시'}</button
 						>
 					</form>
 				</div>
 			</div>
+			{#if data.duplicate}<p class="small muted">
+					같은 이름의 문서가 있습니다. 위의 AI 통합을 사용하거나 제목을 변경해 새 문서로 게시해
+					주세요.
+				</p>{/if}
 			{#if dirty}<p class="small muted">
 					수정 사항을 먼저 저장하면 문서를 게시할 수 있습니다.
 				</p>{/if}
