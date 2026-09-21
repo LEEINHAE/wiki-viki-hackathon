@@ -7,15 +7,22 @@
 	import Icon from '$lib/components/Icon.svelte';
 	import '../app.css';
 	let { children } = $props();
+	let pointerDownOutside = false;
 	let dialog;
-	let modalOpen = $state(false);
+	let wikifierStarted = $state(false);
 	setContext('open-wikifier', () => {
-		modalOpen = true;
+		wikifierStarted = true;
 		dialog.showModal();
 	});
 	function close() {
 		dialog?.close();
-		modalOpen = false;
+	}
+	function isBackdrop(event) {
+		if (event.target !== dialog) return false;
+		const { left, right, top, bottom } = dialog.getBoundingClientRect();
+		return (
+			event.clientX < left || event.clientX > right || event.clientY < top || event.clientY > bottom
+		);
 	}
 	afterNavigate(close);
 </script>
@@ -35,14 +42,26 @@
 	bind:this={dialog}
 	class="wikifier-dialog"
 	aria-label="AI 위키파이어"
-	onclose={() => (modalOpen = false)}
-	onclick={(event) => {
-		if (event.target === dialog) close();
+	onpointerdown={(event) => {
+		pointerDownOutside = isBackdrop(event);
+	}}
+	onpointercancel={() => (pointerDownOutside = false)}
+	onpointerup={(event) => {
+		const pointerUpOutside = isBackdrop(event);
+
+		if (pointerDownOutside && pointerUpOutside) {
+			close();
+		}
+
+		pointerDownOutside = false;
 	}}
 >
-	<div class="dialog-inner">
+	<div class="dialog-toolbar">
 		<button class="modal-close theme-button" aria-label="위키파이어 닫기" onclick={close}
 			><Icon name="close" /></button
-		>{#if modalOpen}<WikifyForm oncomplete={close} />{/if}
+		>
+	</div>
+	<div class="dialog-inner">
+		{#if wikifierStarted}<WikifyForm oncomplete={close} inModal />{/if}
 	</div>
 </dialog>

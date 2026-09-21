@@ -1,4 +1,6 @@
 import { db } from './db.js';
+import { readLinkSnapshot } from './document-links.js';
+import { linkedWikiTokens } from '../wiki-links.js';
 import { marked } from 'marked';
 import { createHeadingSequence } from '../wiki-headings.js';
 export { buildToc } from '../wiki-headings.js';
@@ -18,95 +20,101 @@ function escapeHtml(value) {
 export async function getDocument(slug) {
 	const sql = db();
 	const [direct] = await sql`SELECT * FROM documents WHERE slug = ${slug} LIMIT 1`;
-	if (direct) return { document: direct, redirectedFrom: null };
+	if (direct) return direct.deleted_at ? null : { document: direct, redirectedFrom: null };
 	const [redirect] =
-		await sql`SELECT d.*, r.alias_title FROM redirects r JOIN documents d ON d.id = r.document_id WHERE r.alias_slug = ${slug} LIMIT 1`;
+		await sql`SELECT d.*, r.alias_title FROM redirects r JOIN documents d ON d.id = r.document_id WHERE r.alias_slug = ${slug} AND d.deleted_at IS NULL LIMIT 1`;
 	return redirect ? { document: redirect, redirectedFrom: redirect.alias_title } : null;
 }
 
-export async function saveDocument({
-	title,
-	content,
-	editor = 'Editor-01',
-	summary = '',
-	originalSlug
-}) {
-	const sql = db();
-	const slug = originalSlug || slugify(title);
-	const [doc] = await sql`
-		WITH upserted AS (
-			INSERT INTO documents (slug, title, content, editor_handle)
-			VALUES (${slug}, ${title}, ${content}, ${editor})
-			ON CONFLICT (slug) DO UPDATE SET
-				title = EXCLUDED.title,
-				content = EXCLUDED.content,
-				editor_handle = EXCLUDED.editor_handle,
-				updated_at = NOW()
-			RETURNING *
-		), inserted_revision AS (
-			INSERT INTO revisions (document_id, content, editor_handle, summary)
-			SELECT id, ${content}, ${editor}, ${summary} FROM upserted
-		)
-		SELECT * FROM upserted
-	`;
-	return doc;
-}
+export { saveDocument } from './document-write.js';
 
 export async function recentChanges(limit = 12) {
-	return db()`SELECT slug, title, editor_handle, updated_at FROM documents ORDER BY updated_at DESC LIMIT ${limit}`;
+	return db()`SELECT slug, title, editor_handle, updated_at FROM documents WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT ${limit}`;
 }
 
-export async function renderWiki(content, draftDocuments = []) {
-	const sql = db();
-	const names = [...content.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g)].map((match) =>
-		match[1].trim()
-	);
-	let known = new Set();
-	if (names.length) {
-		const slugs = names.map(slugify);
-		// const rows = await sql`SELECT slug FROM documents WHERE slug IN ${sql(slugs)} UNION SELECT alias_slug AS slug FROM redirects WHERE alias_slug IN ${sql(slugs)}`;
-		const rows = await sql`
-      SELECT slug FROM documents WHERE slug = ANY(${slugs})
-      UNION
-      SELECT alias_slug AS slug FROM redirects WHERE alias_slug = ANY(${slugs})
-    `;
-		known = new Set(rows.map((row) => row.slug));
-	}
-	const footnotes = new Map();
-	let source = content.replace(/^\[\^([^\]]+)\]:\s*(.+)$/gm, (_, id, note) => {
-		footnotes.set(id, note);
-		return '';
+export async function renderWiki(
+	content,
+	draftDocuments = [],
+	linkChanges = {},
+	{ anchorPrefix = '', imageLinks = false, sourceSlug = '', catalog = null } = {}
+) {
+	const links = linkedWikiTokens(content, catalog || (await readLinkSnapshot()).catalog, {
+		sourceSlug,
+		drafts: draftDocuments,
+		linkChanges
 	});
-	source = source.replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target, label) => {
-		const slug = slugify(target);
-		const draft = !known.has(slug) && draftDocuments.find((doc) => doc.slug === slug);
-		if (draft) return `[${label || target}](/drafts?open=${draft.id} "wikilink:draft")`;
-		return `[${label || target}](/wiki/${encodeURIComponent(slug)} "wikilink:${known.has(slug) ? 'exists' : 'missing'}")`;
-	});
-	source = source.replace(
-		/\[\^([^\]]+)\]/g,
-		(_, id) => `@@WIKIFOOTNOTE:${slugify(id)}:${id.replace(/[^\p{L}\p{N}_.-]/gu, '')}@@`
-	);
+	const { tokens, footnotes } = links;
 	const renderer = new marked.Renderer();
+	const notes = new Map(),
+		normalizedNotes = new Map();
+	const reservedIds = new Set([...footnotes.keys()].map((id) => 'fn-' + slugify(id)));
+	const usedIds = new Set();
+	const noteLabel = (id) => id.replace(/[^\p{L}\p{N}_.-]/gu, '') || id;
+	for (const [id, text] of footnotes) {
+		const slug = slugify(id),
+			base = 'fn-' + slug;
+		let anchor = base,
+			suffix = 2;
+		while (usedIds.has(anchor) || (anchor !== base && reservedIds.has(anchor)))
+			anchor = `${base}--${suffix++}`;
+		usedIds.add(anchor);
+		const note = { anchor, label: noteLabel(id), text, references: [] };
+		notes.set(id, note);
+		const matches = normalizedNotes.get(slug) || [];
+		matches.push(note);
+		normalizedNotes.set(slug, matches);
+	}
+	const renderText = renderer.text.bind(renderer);
+	renderer.text = (token) => {
+		if (token.footnoteId === undefined) return renderText(token);
+		const matches = normalizedNotes.get(slugify(token.footnoteId));
+		const note = notes.get(token.footnoteId) || (matches?.length === 1 ? matches[0] : null);
+		if (!note) return renderText(token);
+		const id = `${anchorPrefix}fnref-${note.anchor.slice(3)}-${note.references.length + 1}`;
+		note.references.push(id);
+		const label = escapeHtml(noteLabel(token.footnoteId));
+		return `<sup class="footnote-ref"><a id="${escapeHtml(id)}" href="#${escapeHtml(anchorPrefix + note.anchor)}" aria-label="각주 ${label} 보기">[${label}]</a></sup>`;
+	};
 	const nextHeading = createHeadingSequence();
 	renderer.heading = ({ tokens, depth }) => {
-		const { id, number } = nextHeading(depth);
+		const { id: headingId, number } = nextHeading(depth);
+		const id = escapeHtml(anchorPrefix + headingId);
 		return `<h${depth} id="${id}"><a class="section-number" href="#${id}" aria-label="${number}번 문단 링크">${number}.</a> ${renderer.parser.parseInline(tokens)}</h${depth}>`;
+	};
+	const renderTable = renderer.table.bind(renderer);
+	let tableIndex = 0;
+	renderer.table = (token) => {
+		const number = ++tableIndex;
+		const id = escapeHtml(`${anchorPrefix}table-${number}`);
+		return `<div class="wiki-table"><p class="wiki-table-hint" id="${id}-hint">표가 잘리면 좌우로 스크롤하세요. 키보드: 표에 초점을 두고 ← →.</p><div class="wiki-table-scroll" id="${id}" tabindex="0" role="region" aria-label="표 ${number}" aria-describedby="${id}-hint">${renderTable(token)}</div></div>`;
 	};
 	renderer.html = ({ text }) => escapeHtml(text);
 	renderer.link = ({ href, title, tokens }) => {
 		const label = renderer.parser.parseInline(tokens);
 		const state = title?.startsWith('wikilink:') ? title.slice(9) : null;
-		const safeHref = /^(?:https?:|mailto:|\/|#)/i.test(href) ? escapeHtml(href) : '#';
-		return `<a href="${safeHref}"${state ? ` class="wiki-link ${state === 'missing' ? 'missing' : ''}"` : ''}>${label}</a>`;
+		const safeHref = /^(?:https?:|mailto:|\/|#)/i.test(href)
+			? escapeHtml(href.startsWith('#') ? '#' + anchorPrefix + href.slice(1) : href)
+			: '#';
+		return `<a href="${safeHref}"${state ? ` class="wiki-link ${state === 'missing' ? 'missing' : ''}"` : ''}${state === 'auto' ? ' data-auto-link="true" title="자동 연결"' : ''}>${label}</a>`;
 	};
-	let html = await marked.parse(source, { renderer, gfm: true });
-	html = html.replace(
-		/@@WIKIFOOTNOTE:([^:]+):([^@]+)@@/g,
-		'<sup class="footnote-ref"><a href="#fn-$1">[$2]</a></sup>'
-	);
-	if (footnotes.size)
-		html += `<section class="footnotes"><hr><ol>${[...footnotes].map(([id, note]) => `<li id="fn-${escapeHtml(slugify(id))}">${escapeHtml(note)}</li>`).join('')}</ol></section>`;
+	if (imageLinks)
+		renderer.image = ({ href, text }) => {
+			const safeHref = /^(?:https?:|\/)/i.test(href) ? escapeHtml(href) : '#';
+			return `<a href="${safeHref}">이미지: ${escapeHtml(text || '보기')}</a>`;
+		};
+	let html = await marked.parser(tokens, { renderer, gfm: true });
+	if (notes.size)
+		html += `<section class="footnotes" aria-label="각주"><hr><ol>${[...notes.values()]
+			.map((note) => {
+				const backlinks = note.references
+					.map(
+						(id, index) =>
+							`<a class="footnote-backlink" href="#${escapeHtml(id)}" aria-label="각주 ${escapeHtml(note.label)}의 ${index + 1}번째 참조로 돌아가기">${note.references.length === 1 ? '본문으로' : `참조 ${index + 1}로`} ↩</a>`
+					)
+					.join('');
+				return `<li id="${escapeHtml(anchorPrefix + note.anchor)}" tabindex="-1"><span class="footnote-label">[${escapeHtml(note.label)}]</span> ${escapeHtml(note.text)}${backlinks ? `<span class="footnote-backlinks">${backlinks}</span>` : ''}</li>`;
+			})
+			.join('')}</ol></section>`;
 	return html;
 }
 
@@ -117,7 +125,7 @@ export async function autoLinkDocument(content, suggestions = [], draftTitles = 
 	const sql = db();
 	const lowerTerms = terms.map((term) => term.toLowerCase());
 	const rows = terms.length
-		? await sql`SELECT title FROM documents WHERE LOWER(title) = ANY(${lowerTerms})`
+		? await sql`SELECT title FROM documents WHERE deleted_at IS NULL AND LOWER(title) = ANY(${lowerTerms})`
 		: [];
 	return linkTerms(content, [...rows.map((row) => row.title), ...draftTitles]);
 }

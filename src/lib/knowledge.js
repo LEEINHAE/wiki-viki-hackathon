@@ -1,15 +1,11 @@
-export function slugify(value) {
-	return value
-		.trim()
-		.replace(/[\s_]+/g, '-')
-		.replace(/[^\p{L}\p{N}:.~-]/gu, '')
-		.replace(/-+/g, '-')
-		.toLowerCase();
-}
+import { slugify, createLinkCatalog, linkedWikiTokens } from './wiki-links.js';
+export { slugify };
+
 export const documentHref = (slug) => `/wiki/${encodeURIComponent(slug)}`;
+export const maxDraftDocuments = 32;
 
 export function validateDraftDocuments(documents) {
-	if (!Array.isArray(documents) || !documents.length || documents.length > 8)
+	if (!Array.isArray(documents) || !documents.length || documents.length > maxDraftDocuments)
 		throw new Error('Invalid draft count');
 	const seen = new Set();
 	return documents.map((document) => {
@@ -115,29 +111,42 @@ export function searchTerms(query) {
 		)
 	].slice(0, 10);
 }
-export function buildKnowledgeGraph(documents, aliases = []) {
-	const lookup = new Map(documents.map((doc) => [doc.slug, doc.slug]));
-	const byId = new Map(documents.map((doc) => [String(doc.id), doc.slug]));
-	for (const alias of aliases) {
-		const target = byId.get(String(alias.document_id));
-		if (target) lookup.set(alias.alias_slug, target);
+// Reading connections retain the parser's evidence and the existing snapshot order.
+// Outgoing links use the same content that is rendered, even if a later snapshot
+// contains an edit to the current document.
+export function documentConnections(document, documents, catalog) {
+	const outgoing = new Map(
+		linkedWikiTokens(document.content, catalog, { sourceSlug: document.slug }).connections.map(
+			(connection) => [connection.target, connection]
+		)
+	);
+	const related = [],
+		backlinks = [];
+	const withReason = (doc, { automatic, label }) => ({
+		...documentSummary(doc),
+		connection: { automatic, label }
+	});
+	for (const other of documents) {
+		if (other.deleted_at || other.slug === document.slug) continue;
+		const connection = outgoing.get(other.slug);
+		if (connection) related.push(withReason(other, connection));
+		const incoming = linkedWikiTokens(other.content, catalog, {
+			sourceSlug: other.slug
+		}).connections.find((connection) => connection.target === document.slug);
+		if (incoming) backlinks.push(withReason(other, incoming));
 	}
+	return { related, backlinks };
+}
+
+export function buildKnowledgeGraph(documents, aliases = []) {
+	const catalog = createLinkCatalog(documents, aliases);
 	const edges = [];
 	const missing = new Map();
 	const counts = new Map(documents.map((doc) => [doc.slug, 0]));
 	for (const doc of documents) {
-		const targets = new Set();
-		for (const match of doc.content.matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g)) {
-			const title = match[1].trim();
-			const slug = slugify(title);
-			if (!slug) continue;
-			const target = lookup.get(slug);
-			if (!target) {
-				missing.set(slug, { slug, title });
-				continue;
-			}
-			if (target === doc.slug || targets.has(target)) continue;
-			targets.add(target);
+		const links = linkedWikiTokens(doc.content, catalog, { sourceSlug: doc.slug });
+		for (const item of links.missing) missing.set(item.slug, item);
+		for (const { target } of links.connections) {
 			edges.push({ source: doc.slug, target });
 			counts.set(target, counts.get(target) + 1);
 		}

@@ -26,6 +26,28 @@ test('empty and unlinked collections still produce a usable map', () => {
 	assert.equal(graph.linkCount, 0);
 });
 
+test('ordinary document titles and registered aliases create real incoming and outgoing links', () => {
+	const documents = [
+		{
+			id: '1',
+			slug: 'handover',
+			title: '교대 인계',
+			content: 'RFCC와 설비 점검을 확인한다. RFCC를 다시 확인한다.'
+		},
+		{ id: '2', slug: 'rfcc', title: 'RFCC', content: '교대 인계에 기록한다.' },
+		{ id: '3', slug: 'inspection', title: '정기 점검', content: '' }
+	];
+	const graph = buildKnowledgeGraph(documents, [
+		{ alias_title: '설비 점검', alias_slug: '설비-점검', document_id: '3' }
+	]);
+	assert.deepEqual(graph.allEdges, [
+		{ source: 'handover', target: 'rfcc' },
+		{ source: 'handover', target: 'inspection' },
+		{ source: 'rfcc', target: 'handover' }
+	]);
+	assert.equal(graph.linkCount, 3);
+});
+
 test('Korean questions and multiword English queries retain useful search terms', () => {
 	assert.ok(searchTerms('RFCC는 무엇인가요?').includes('rfcc'));
 	assert.ok(searchTerms('산단스팀과 RFCC의 관계').includes('산단스팀'));

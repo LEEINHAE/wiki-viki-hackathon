@@ -3,7 +3,12 @@ import { validateDraftDocuments } from '$lib/knowledge.js';
 import { supportsUpload, uploadFormatMessage } from '$lib/upload.js';
 import { parseUpload } from '$lib/server/parser.js';
 import { structureDocuments, semanticGovernance } from '$lib/server/openai.js';
-import { regexGovernance, validHandle } from '$lib/server/governance.js';
+import {
+	assertSafeForAI,
+	ContentBlockedError,
+	regexGovernance,
+	validHandle
+} from '$lib/server/governance.js';
 import { db } from '$lib/server/db.js';
 import { autoLinkDocument } from '$lib/server/wiki.js';
 
@@ -36,13 +41,14 @@ export async function POST({ request }) {
 				{ message: '텍스트를 추출할 수 없습니다. OCR은 지원하지 않습니다.' },
 				{ status: 422 }
 			);
-		const regex = regexGovernance(text);
-		const semantic = regex.passed
-			? await semanticGovernance(text)
-			: {
-					passed: false,
-					reasons: ['키워드 검사에 통과하지 못해 의미 기반 검사를 건너뛰었습니다.']
-				};
+		const regex = assertSafeForAI(file.name, text);
+		const semantic = await semanticGovernance(`${file.name}\n${text}`);
+		if (semantic.unavailable)
+			return json(
+				{ message: '콘텐츠 보호 검사 결과를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.' },
+				{ status: 503 }
+			);
+		if (!semantic.passed) throw new ContentBlockedError();
 		const structured = await structureDocuments(text, file.name);
 		const documents = validateDraftDocuments(structured.documents);
 		const candidates = await Promise.all(
@@ -73,20 +79,29 @@ export async function POST({ request }) {
 		);
 		const sql = db();
 		const rows = await sql.transaction(
-			candidates.map(
-				(draft) =>
-					sql`INSERT INTO drafts (title,slug,content,source_name,aliases,governance,status,editor_handle) VALUES (${draft.title},${draft.slug},${draft.content},${file.name},${JSON.stringify(draft.aliases)},${JSON.stringify(draft.governance)},${draft.status},${editor}) RETURNING id,title,status`
-			)
+			(tx) =>
+				candidates.map(
+					(draft) =>
+						tx`INSERT INTO drafts (title,slug,content,source_name,aliases,governance,status,editor_handle) VALUES (${draft.title},${draft.slug},${draft.content},${file.name},${JSON.stringify(draft.aliases)},${JSON.stringify(draft.governance)},${draft.status},${editor}) RETURNING id,title,status`
+				),
+			{ isolationLevel: 'ReadCommitted' }
 		);
 		const drafts = rows.map(([row], index) => ({
 			...row,
 			linkCount: [...candidates[index].content.matchAll(/\[\[([^\]]+)\]\]/g)].length
 		}));
 		return json(
-			{ drafts, count: drafts.length, aiGenerated: structured.aiGenerated },
+			{
+				drafts,
+				count: drafts.length,
+				aiGenerated: structured.aiGenerated,
+				semanticSkipped: semantic.skipped === true
+			},
 			{ status: 201 }
 		);
 	} catch (error) {
+		if (error instanceof ContentBlockedError)
+			return json({ message: error.message }, { status: 422 });
 		if (error.status === 429)
 			return json(
 				{

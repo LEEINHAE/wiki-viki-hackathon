@@ -12,8 +12,8 @@ export async function searchDocuments(query, limit = 40) {
 			+ (SELECT COUNT(*) * 5 FROM redirects r WHERE r.document_id=d.id AND r.alias_title ILIKE ANY(${patterns}::text[]))
 			+ (SELECT COUNT(*) FROM unnest(${patterns}::text[]) term WHERE d.content ILIKE term) AS relevance
 		FROM documents d
-		WHERE d.title ILIKE ANY(${patterns}::text[]) OR d.content ILIKE ANY(${patterns}::text[])
-			OR EXISTS (SELECT 1 FROM redirects r WHERE r.document_id=d.id AND r.alias_title ILIKE ANY(${patterns}::text[]))
+		WHERE d.deleted_at IS NULL AND (d.title ILIKE ANY(${patterns}::text[]) OR d.content ILIKE ANY(${patterns}::text[])
+			OR EXISTS (SELECT 1 FROM redirects r WHERE r.document_id=d.id AND r.alias_title ILIKE ANY(${patterns}::text[])))
 		ORDER BY relevance DESC, d.updated_at DESC LIMIT ${limit}`;
 }
 export async function suggestions(query) {

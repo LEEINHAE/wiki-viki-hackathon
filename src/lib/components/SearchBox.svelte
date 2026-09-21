@@ -1,9 +1,10 @@
 <script>
+	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { documentHref } from '$lib/knowledge.js';
 	import Icon from './Icon.svelte';
-	let { initial = '', compact = false } = $props();
-	let query = $state('');
+	let { initial = '', compact = false, inputId } = $props();
+	let query = $state(untrack(() => initial));
 	let focused = $state(false);
 	let results = $state([]);
 	let loading = $state(false);
@@ -76,6 +77,7 @@
 	<form method="GET" action="/" role="search" onsubmit={submit}>
 		<span class="search-icon"><Icon size={compact ? 18 : 24} /></span>
 		<input
+			id={inputId}
 			name="q"
 			bind:value={query}
 			maxlength="200"

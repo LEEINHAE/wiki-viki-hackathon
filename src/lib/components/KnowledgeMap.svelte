@@ -1,4 +1,5 @@
 <script>
+	import EmptyState from './EmptyState.svelte';
 	import { documentHref } from '$lib/knowledge.js';
 	let { graph } = $props();
 	const positions = [
@@ -38,7 +39,7 @@
 				href={documentHref(node.slug)}
 				title={node.title}>{node.title}<small>{node.links}개의 역링크</small></a
 			>{/each}
-	{:else}<p class="empty-state">
-			문서를 작성하고 [[위키 링크]]로 연결하면 여기에 지식 지도가 나타납니다.
-		</p>{/if}
+	{:else}<EmptyState
+			><p>문서를 작성하고 [[위키 링크]]로 연결하면 여기에 지식 지도가 나타납니다.</p></EmptyState
+		>{/if}
 </div>

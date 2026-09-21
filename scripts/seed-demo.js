@@ -1,8 +1,6 @@
 import postgres from 'postgres';
-
-if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL이 필요합니다.');
-
-const sql = postgres(process.env.DATABASE_URL, { max: 1 });
+import { writeSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 const editor = 'Operator-A';
 const slugify = (value) =>
 	value
@@ -137,26 +135,104 @@ const documents = [
 	}
 ];
 
-try {
-	for (const item of documents) {
-		await sql.begin(async (tx) => {
+// Existing documents (including trash) own their names and routes. Never repair
+// their content or aliases from a seed: those may be intentional user edits.
+export async function runDemoSeed({ sql, logger = console }) {
+	const results = await sql.begin(async (tx) => {
+		await tx`SET LOCAL lock_timeout = '10s'`;
+		await tx`LOCK TABLE documents, redirects IN SHARE ROW EXCLUSIVE MODE`;
+		const results = [];
+		let aliasCount = 0;
+		for (const item of documents) {
 			const slug = slugify(item.title);
-			const [existing] = await tx`SELECT id,content FROM documents WHERE slug=${slug}`;
-			const [document] = await tx`
-				INSERT INTO documents (slug,title,content,editor_handle)
-				VALUES (${slug},${item.title},${item.content},${editor})
-				ON CONFLICT (slug) DO UPDATE SET title=EXCLUDED.title,content=EXCLUDED.content,editor_handle=EXCLUDED.editor_handle,updated_at=CASE WHEN documents.content IS DISTINCT FROM EXCLUDED.content THEN NOW() ELSE documents.updated_at END
-				RETURNING id`;
-			if (!existing || existing.content !== item.content) {
-				await tx`INSERT INTO revisions (document_id,content,editor_handle,summary) VALUES (${document.id},${item.content},${editor},'예시 문서 생성')`;
+			const routes = [slug, ...item.aliases.map(slugify)];
+			const names = [item.title, ...item.aliases];
+			// A new Read Committed statement after the lock sees writers that
+			// committed while this run waited, including cross-table name/route claims.
+			const existing = await tx`SELECT d.deleted_at FROM documents d
+				WHERE d.title=ANY(${names}::text[]) OR d.slug=ANY(${routes}::text[])
+				UNION ALL SELECT d.deleted_at FROM redirects r JOIN documents d ON d.id=r.document_id
+				WHERE r.alias_slug=ANY(${routes}::text[]) OR r.alias_title=ANY(${names}::text[])`;
+			if (existing.length) {
+				results.push({
+					title: item.title,
+					status: 'skipped',
+					archived: existing.some((d) => d.deleted_at)
+				});
+				continue;
 			}
+			const inserted = await tx`INSERT INTO documents(slug,title,content,editor_handle)
+				VALUES (${slug},${item.title},${item.content},${editor}) RETURNING id`;
+			if (inserted.length !== 1) throw new Error('Demo document was not inserted');
+			const id = inserted[0].id;
+			const revisions = await tx`INSERT INTO revisions(document_id,content,editor_handle,summary)
+				VALUES (${id},${item.content},${editor},'예시 문서 생성') RETURNING id`;
+			if (revisions.length !== 1) throw new Error('Demo revision was not inserted');
 			for (const alias of item.aliases) {
-				await tx`INSERT INTO redirects (alias_slug,alias_title,document_id) VALUES (${slugify(alias)},${alias},${document.id}) ON CONFLICT (alias_slug) DO UPDATE SET alias_title=EXCLUDED.alias_title,document_id=EXCLUDED.document_id`;
+				const aliases = await tx`INSERT INTO redirects(alias_slug,alias_title,document_id)
+					VALUES (${slugify(alias)},${alias},${id}) RETURNING id`;
+				if (aliases.length !== 1) throw new Error('Demo alias was not inserted');
+				aliasCount++;
 			}
-		});
-		console.log(`${item.title} 생성 완료`);
+			results.push({ title: item.title, status: 'created', id });
+		}
+		const ids = results.filter((item) => item.status === 'created').map((item) => item.id);
+		if (ids.length) {
+			// RETURNING alone does not detect a later trigger removing inserted rows.
+			const [counts] = await tx`SELECT
+				(SELECT COUNT(*)::int FROM documents WHERE id=ANY(${ids}::bigint[])) AS documents,
+				(SELECT COUNT(*)::int FROM revisions WHERE document_id=ANY(${ids}::bigint[])) AS revisions,
+				(SELECT COUNT(*)::int FROM redirects WHERE document_id=ANY(${ids}::bigint[])) AS aliases`;
+			if (
+				counts.documents !== ids.length ||
+				counts.revisions !== ids.length ||
+				counts.aliases !== aliasCount
+			)
+				throw new Error('Demo batch was not fully stored');
+		}
+		return results;
+	});
+	// No success/count output is emitted until the complete batch commits.
+	for (const item of results)
+		logger.log(
+			`${item.title}: ${item.status === 'created' ? '생성 완료' : '기존 문서·주소 보존으로 건너뜀'}`
+		);
+	const created = results.filter((item) => item.status === 'created').length;
+	const archived = results.filter((item) => item.archived).length;
+	logger.log(
+		`예시 문서: 생성 ${created}개, 기존 데이터 보존으로 건너뜀 ${results.length - created}개 (휴지통 보존으로 건너뜀 ${archived}개).`
+	);
+	return results;
+}
+
+async function main() {
+	if (!process.env.DATABASE_URL) {
+		console.error('DATABASE_URL이 필요합니다. 예시 적재 대상 연결을 설정해 주세요.');
+		process.exitCode = 1;
+		return;
 	}
-	console.log(`예시 문서 ${documents.length}개 생성 완료`);
-} finally {
-	await sql.end();
+	const sql = postgres(process.env.DATABASE_URL, {
+		max: 1,
+		connect_timeout: 10,
+		onnotice: () => {}
+	});
+	try {
+		await runDemoSeed({ sql });
+	} finally {
+		await sql.end({ timeout: 5 });
+	}
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+	// Match the migration CLI boundary for a disconnected driver's deferred write.
+	process.once('uncaughtException', () => {
+		writeSync(2, '예시 적재가 중단되었습니다. DB 상태를 확인한 뒤 다시 실행해 주세요.\n');
+		process.exit(1);
+	});
+	main().catch(() => {
+		console.error(
+			'예시 문서 적재를 완료하지 못했습니다. DB 연결·마이그레이션·잠금 상태를 확인한 뒤 다시 실행해 주세요.'
+		);
+		process.exitCode = 1;
+	});
 }

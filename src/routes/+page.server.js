@@ -1,28 +1,49 @@
 import { db } from '$lib/server/db.js';
+import { readLinkSnapshot } from '$lib/server/document-links.js';
 import { searchDocuments } from '$lib/server/search.js';
-import { buildKnowledgeGraph, documentSummary } from '$lib/knowledge.js';
+import { buildKnowledgeGraph, categoryOf, documentSummary } from '$lib/knowledge.js';
+
+function homeBrowse(documents, category) {
+	const counts = new Map();
+	for (const document of documents) {
+		const name = categoryOf(document);
+		counts.set(name, (counts.get(name) || 0) + 1);
+	}
+	const selected = documents.filter(
+		(document) => category === '전체' || categoryOf(document) === category
+	);
+	return {
+		category,
+		categories: [...counts]
+			.map(([name, count]) => ({ name, count }))
+			.sort((a, b) => a.name.localeCompare(b.name, 'ko')),
+		total: selected.length,
+		documents: selected.slice(0, 12).map(documentSummary)
+	};
+}
 
 export async function load({ url }) {
 	const q = (url.searchParams.get('q') || '').trim().slice(0, 200);
+	const category = (url.searchParams.get('category') || '전체').trim().slice(0, 64) || '전체';
 	const view = ['activity', 'map'].includes(url.searchParams.get('view'))
 		? url.searchParams.get('view')
 		: 'search';
 	try {
 		const sql = db();
-		const [documents, aliases, drafts, revisions, announcements, discussions, results] =
-			await Promise.all([
-				sql`SELECT id,slug,title,content,editor_handle,updated_at FROM documents ORDER BY updated_at DESC`,
-				sql`SELECT alias_slug,document_id FROM redirects`,
-				sql`SELECT id,title,source_name,status,created_at FROM drafts WHERE status <> 'published' ORDER BY created_at DESC`,
-				sql`SELECT COUNT(*)::int AS count FROM revisions WHERE created_at >= date_trunc('week', NOW() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'`,
-				sql`SELECT title,body,created_at FROM announcements ORDER BY created_at DESC LIMIT 4`,
-				sql`SELECT ds.thread_title,ds.created_at,d.slug,d.title AS document_title FROM discussions ds JOIN documents d ON d.id=ds.document_id ORDER BY ds.created_at DESC LIMIT 5`,
-				q ? searchDocuments(q) : []
-			]);
+		const [snapshot, drafts, revisions, announcements, discussions, results] = await Promise.all([
+			readLinkSnapshot({ content: true }),
+			sql`SELECT id,title,source_name,status,created_at FROM drafts WHERE status <> 'published' ORDER BY created_at DESC`,
+			sql`SELECT COUNT(*)::int AS count FROM revisions r JOIN documents d ON d.id=r.document_id WHERE d.deleted_at IS NULL AND r.created_at >= date_trunc('week', NOW() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'`,
+			sql`SELECT title,body,created_at FROM announcements ORDER BY created_at DESC LIMIT 4`,
+			sql`SELECT ds.thread_title,ds.created_at,d.slug,d.title AS document_title FROM discussions ds JOIN documents d ON d.id=ds.document_id WHERE d.deleted_at IS NULL ORDER BY ds.created_at DESC LIMIT 5`,
+			q ? searchDocuments(q) : []
+		]);
+		const { documents, aliases } = snapshot;
 		const graph = buildKnowledgeGraph(documents, aliases);
 		return {
 			q,
 			view,
+			browse: !q && view === 'search' ? homeBrowse(documents, category) : null,
 			databaseReady: true,
 			announcements,
 			discussions,
@@ -44,6 +65,7 @@ export async function load({ url }) {
 		return {
 			q,
 			view,
+			browse: { category, categories: [], documents: [], total: null },
 			databaseReady: false,
 			announcements: [],
 			discussions: [],
