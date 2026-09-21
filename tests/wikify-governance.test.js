@@ -38,8 +38,75 @@ before(async () => {
 after(async () => server?.close());
 beforeEach(() => {
 	state.env.OPENAI_API_KEY = 'test-only-key';
+	delete state.env.OPENAI_MODEL;
 	state.database.calls = 0;
 	state.database.drafts.length = 0;
+});
+
+for (const model of [undefined, 'gpt-5-mini', 'gpt-5-mini-2025-08-07', 'gpt-4.1-mini'])
+	test(`wikify uses bounded reasoning for GPT-5 mini while preserving model selection (${model})`, async (t) => {
+		state.env.OPENAI_MODEL = model;
+		const calls = interceptAI(t, [
+			{ value: { passed: true, reasons: [] } },
+			{ value: { topics: [{ title: generated.documents[0].title, scope: '장비 상태 확인' }] } },
+			{ value: generated }
+		]);
+		assert.equal((await upload()).status, 201);
+		for (const call of calls.slice(1)) {
+			assert.equal(call.model, model || 'gpt-5-mini');
+			assert.deepEqual(call.reasoning, model === 'gpt-4.1-mini' ? undefined : { effort: 'low' });
+		}
+		assert.equal(calls[0].reasoning, undefined);
+	});
+
+test('a generation deadline cancels pending batches, saves nothing and reports a retryable timeout', async (t) => {
+	const deadline = new AbortController();
+	t.mock.method(AbortSignal, 'timeout', (ms) => {
+		assert.equal(ms, 90000);
+		return deadline.signal;
+	});
+	const topics = Array.from({ length: 32 }, (_, index) => ({
+		title: `가상 약어 ${index + 1}`,
+		scope: '해당 약어의 원문 정의'
+	}));
+	let batches = 0;
+	let cancelled = 0;
+	let started;
+	const ready = new Promise((resolve) => (started = resolve));
+	interceptAI(t, async (request, options) => {
+		if (!request.text?.format) return { value: { passed: true, reasons: [] } };
+		if (request.text.format.name === 'wiki_document_topics') return { value: { topics } };
+		batches++;
+		if (batches === 4) started();
+		if (batches < 4)
+			return {
+				value: {
+					documents: JSON.parse(request.input).topics.map(({ title }) => ({
+						...generated.documents[0],
+						title
+					}))
+				}
+			};
+		return new Promise((_resolve, reject) => {
+			options.signal.addEventListener(
+				'abort',
+				() => {
+					cancelled++;
+					reject(options.signal.reason);
+				},
+				{ once: true }
+			);
+		});
+	});
+	const pending = upload();
+	await ready;
+	deadline.abort(new DOMException('Synthetic deadline', 'TimeoutError'));
+	const response = await pending;
+	assert.equal(response.status, 504);
+	assert.match((await response.json()).message, /시간.*초과/);
+	assert.equal(cancelled, 1);
+	assert.equal(state.database.calls, 0);
+	assert.equal(state.database.drafts.length, 0);
 });
 
 function interceptAI(t, results = []) {

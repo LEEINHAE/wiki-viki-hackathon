@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit';
+import { APIConnectionTimeoutError, APIUserAbortError } from 'openai';
 import { validateDraftDocuments } from '$lib/knowledge.js';
 import { supportsUpload, uploadFormatMessage } from '$lib/upload.js';
 import { parseUpload } from '$lib/server/parser.js';
@@ -102,6 +103,14 @@ export async function POST({ request }) {
 	} catch (error) {
 		if (error instanceof ContentBlockedError)
 			return json({ message: error.message }, { status: 422 });
+		if (error instanceof APIConnectionTimeoutError || error instanceof APIUserAbortError)
+			return json(
+				{
+					message:
+						'AI 초안 생성 시간이 초과되었습니다. 초안은 저장하지 않았습니다. 잠시 후 다시 시도해 주세요.'
+				},
+				{ status: 504 }
+			);
 		if (error.status === 429)
 			return json(
 				{

@@ -163,15 +163,32 @@ try {
 			// Non-JSON / malformed responses must not crash the result view or clear the file.
 			await input.setInputFiles(valid);
 			for (const response of [
-				{ status: 502, contentType: 'text/html', body: '<html>internal proxy error</html>' },
-				{ status: 200, contentType: 'application/json', body: '{"count":1,"drafts":[null]}' }
+				{
+					status: 502,
+					contentType: 'text/html',
+					body: '<html>internal proxy error</html>',
+					message: '초안 생성 결과를 확인하지 못했습니다.'
+				},
+				{
+					status: 200,
+					contentType: 'application/json',
+					body: '{"count":1,"drafts":[null]}',
+					message: '초안 생성 결과를 확인하지 못했습니다.'
+				},
+				{
+					status: 504,
+					contentType: 'application/json',
+					body: JSON.stringify({
+						message:
+							'AI 초안 생성 시간이 초과되었습니다. 초안은 저장하지 않았습니다. 잠시 후 다시 시도해 주세요.'
+					}),
+					message: 'AI 초안 생성 시간이 초과되었습니다.'
+				}
 			]) {
-				await p.route('**/api/wikify', (route) => route.fulfill(response), { times: 1 });
+				const { message, ...payload } = response;
+				await p.route('**/api/wikify', (route) => route.fulfill(payload), { times: 1 });
 				await submit(p, dialog);
-				await dialog
-					.getByRole('alert')
-					.filter({ hasText: '초안 생성 결과를 확인하지 못했습니다.' })
-					.waitFor();
+				await dialog.getByRole('alert').filter({ hasText: message }).waitFor();
 				assert.equal(await input.evaluate((el) => el.files.length), 1);
 				assert.equal(await create.isEnabled(), true);
 			}
