@@ -1,0 +1,7 @@
+<script>let { data, form } = $props();</script>
+<div class="form-page"><section class="wiki-form"><header class="document-header"><h1>토론: {data.document.title}</h1><div class="document-meta">의견이 엇갈리는 내용은 편집 전에 토론해 주세요.</div></header>
+	<nav class="document-actions"><a href={`/wiki/${data.document.slug}`}>읽기</a><a href={`/edit/${data.document.slug}`}>편집</a><a href={`/history/${data.document.slug}`}>역사</a></nav>
+	{#if form?.message}<div class="notice warning">{form.message}</div>{/if}{#if form?.success}<div class="notice">토론을 등록했습니다.</div>{/if}
+	{#each data.threads as thread}<article class="thread"><div class="thread-head"><b>{thread.thread_title}</b><span>{thread.editor_handle} · {new Date(thread.created_at).toLocaleString('ko-KR')}</span></div><div class="thread-body">{thread.body}</div></article>{:else}<p class="muted">아직 토론이 없습니다. 아래에서 첫 토론을 시작해 보세요.</p>{/each}
+	<h2>새 토론 시작</h2><form method="POST"><div class="field"><label for="title">주제</label><input id="title" name="title" value={form?.title ?? ''} required /></div><div class="field"><label for="body">의견</label><textarea id="body" name="body" style="min-height:130px" required>{form?.body ?? ''}</textarea></div><div class="field"><label for="editor">익명 사용자 이름</label><input id="editor" name="editor" value={form?.editor ?? 'Editor-01'} required /></div><div class="button-row"><button class="primary-button">토론 등록</button></div></form>
+</section></div>
