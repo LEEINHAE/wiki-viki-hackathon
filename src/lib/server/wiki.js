@@ -1,5 +1,7 @@
 import { db } from './db.js';
 import { marked } from 'marked';
+import { createHeadingSequence } from '../wiki-headings.js';
+export { buildToc } from '../wiki-headings.js';
 
 import { slugify, linkTerms } from '$lib/knowledge.js';
 export { slugify };
@@ -86,9 +88,11 @@ export async function renderWiki(content, draftDocuments = []) {
 		(_, id) => `@@WIKIFOOTNOTE:${slugify(id)}:${id.replace(/[^\p{L}\p{N}_.-]/gu, '')}@@`
 	);
 	const renderer = new marked.Renderer();
-	let headingIndex = 0;
-	renderer.heading = ({ tokens, depth }) =>
-		`<h${depth} id="section-${++headingIndex}">${renderer.parser.parseInline(tokens)}</h${depth}>`;
+	const nextHeading = createHeadingSequence();
+	renderer.heading = ({ tokens, depth }) => {
+		const { id, number } = nextHeading(depth);
+		return `<h${depth} id="${id}"><a class="section-number" href="#${id}" aria-label="${number}번 문단 링크">${number}.</a> ${renderer.parser.parseInline(tokens)}</h${depth}>`;
+	};
 	renderer.html = ({ text }) => escapeHtml(text);
 	renderer.link = ({ href, title, tokens }) => {
 		const label = renderer.parser.parseInline(tokens);
@@ -116,19 +120,4 @@ export async function autoLinkDocument(content, suggestions = [], draftTitles = 
 		? await sql`SELECT title FROM documents WHERE LOWER(title) = ANY(${lowerTerms})`
 		: [];
 	return linkTerms(content, [...rows.map((row) => row.title), ...draftTitles]);
-}
-
-export function buildToc(content) {
-	const counters = [0, 0, 0, 0, 0, 0];
-	return [...content.matchAll(/^(#{1,6})\s+(.+)$/gm)].map((match, index) => {
-		const level = match[1].length;
-		counters[level - 1] += 1;
-		counters.fill(0, level);
-		return {
-			level,
-			title: match[2].replace(/[*_`~]/g, ''),
-			number: counters.slice(0, level).filter(Boolean).join('.'),
-			id: `section-${index + 1}`
-		};
-	});
 }

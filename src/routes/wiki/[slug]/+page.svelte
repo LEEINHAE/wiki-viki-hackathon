@@ -1,7 +1,12 @@
 <script>
 	import Toc from '$lib/components/Toc.svelte';
-	import { documentHref, formatDate } from '$lib/knowledge.js';
+	import { documentHref } from '$lib/knowledge.js';
 	let { data } = $props();
+	const modifiedDate = new Intl.DateTimeFormat('ko-KR', {
+		dateStyle: 'medium',
+		timeStyle: 'short',
+		timeZone: 'Asia/Seoul'
+	});
 </script>
 
 <svelte:head>
@@ -9,7 +14,7 @@
 		>{data.missing ? data.pendingDraft?.title || '아직 없는 문서' : data.document.title} — 위키비키</title
 	>
 </svelte:head>
-<main class="page-shell article-page">
+<main class="page-shell article-page" id="article-top">
 	{#if data.missing}<section class="panel empty-state">
 			<span class="eyebrow">{data.pendingDraft ? '검토 중인 지식' : '아직 기록되지 않은 지식'}</span
 			>
@@ -34,32 +39,41 @@
 			<article class="article-main">
 				<header class="article-header">
 					<h1>{data.document.title}</h1>
-					{#if data.aliases.length}<p class="article-aliases">{data.aliases.join(' · ')}</p>{/if}
-					<div class="article-toolbar">
-						<div class="document-meta">
-							최근 수정 {formatDate(data.document.updated_at)} · {data.document.editor_handle}
-						</div>
-						<nav class="document-actions" aria-label="문서 작업">
-							<a href={`/edit/${encodeURIComponent(data.document.slug)}`}>편집</a><a
-								href={`/history/${encodeURIComponent(data.document.slug)}`}>역사</a
-							><a href={`/discussion/${encodeURIComponent(data.document.slug)}`}
-								>토론 {data.threads}</a
-							>
-						</nav>
-					</div>
+					{#if data.aliases.length}<p class="article-aliases">
+							<span>다른 이름</span>
+							{data.aliases.join(' · ')}
+						</p>{/if}
+					<p class="document-meta">
+						최근 수정 시각: <time datetime={new Date(data.document.updated_at).toISOString()}
+							>{modifiedDate.format(new Date(data.document.updated_at))}</time
+						>
+					</p>
 				</header>
+				<nav class="article-tabs" aria-label="문서 작업">
+					<a class="current" href={documentHref(data.document.slug)} aria-current="page">문서</a>
+					<a href={`/discussion/${encodeURIComponent(data.document.slug)}`}
+						>토론 <span class="tab-count">{data.threads}</span></a
+					>
+					<a class="article-edit" href={`/edit/${encodeURIComponent(data.document.slug)}`}>편집</a>
+					<a href={`/history/${encodeURIComponent(data.document.slug)}`}>역사</a>
+				</nav>
+				<div class="article-category"><span>분류</span><strong>{data.category}</strong></div>
 				{#if data.redirectedFrom}<div class="redirect-notice">
 						<b>{data.redirectedFrom}</b>에서 연결된 문서입니다.
 					</div>{/if}
-				{#if data.toc.length}<div class="mobile-toc"><Toc items={data.toc} /></div>{/if}
+				{#if data.toc.length}<div class="article-toc" id="document-toc">
+						<Toc items={data.toc} />
+					</div>{/if}
 				<div class="wiki-content">{@html data.html}</div>
 				<div class="contribute-banner">
 					<div>
-						<h3>아는 것이 있다면 5분만</h3>
-						<p>한 문장만 고쳐도 됩니다. {data.contributors}명의 편집자가 함께 만든 문서입니다.</p>
+						<h3>함께 다듬는 지식</h3>
+						<p>
+							{data.contributors}명의 편집자가 함께 만든 문서입니다. 더 나은 설명을 보태 주세요.
+						</p>
 					</div>
 					<a class="primary-button" href={`/edit/${encodeURIComponent(data.document.slug)}`}
-						>한 줄 고치기 ↗</a
+						>문서 편집</a
 					>
 				</div>
 				<section class="backlinks">
@@ -70,19 +84,34 @@
 							>{:else}<p class="muted small">아직 이 문서를 가리키는 문서가 없습니다.</p>{/each}
 					</div>
 				</section>
+				<a class="article-back-top" href="#article-top">맨 위로 ↑</a>
 			</article>
 			<aside class="article-aside">
-				<section class="panel">
-					<Toc items={data.toc} />{#if !data.toc.length}<h3>문서 안내</h3>
-						<p class="small muted">이 문서에는 아직 목차가 없습니다.</p>{/if}
-				</section>
-				<section class="panel">
-					<h3>함께 읽으면 좋은 문서</h3>
+				<section class="article-side-section">
+					<h2>관련 문서</h2>
 					{#each data.related as doc}<a class="related-link" href={documentHref(doc.slug)}
 							>{doc.title}<small>{doc.category}</small></a
 						>{:else}<p class="muted small">
 							본문에 위키 링크를 추가해 지식을 연결해 주세요.
 						</p>{/each}
+				</section>
+				<section class="article-side-section article-info">
+					<h2>문서 정보</h2>
+					<dl>
+						<div>
+							<dt>마지막 편집</dt>
+							<dd>{data.document.editor_handle}</dd>
+						</div>
+						<div>
+							<dt>참여한 편집자</dt>
+							<dd>{data.contributors}명</dd>
+						</div>
+						<div>
+							<dt>연결된 문서</dt>
+							<dd>{data.backlinks.length}개</dd>
+						</div>
+					</dl>
+					<a href={`/history/${encodeURIComponent(data.document.slug)}`}>변경 이력 보기 →</a>
 				</section>
 				<p class="source-note">
 					누구나 고칠 수 있고, 모든 변경은 기록됩니다. 문서의 역사를 통해 지식이 쌓인 과정을
