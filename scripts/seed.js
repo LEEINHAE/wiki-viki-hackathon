@@ -1,8 +1,15 @@
-import postgres from 'postgres';
-import { pathToFileURL } from 'node:url';
-import { slugify } from '../src/lib/knowledge.js';
-import { seedFiles } from './lib/seed-files.js';
-
+import { openDatabase } from './database.js';
+import { readdir, readFile } from 'node:fs/promises';
+import { extname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { seedDocument } from './seed-helpers.js';
+import { createAI } from '../src/lib/server/openai-core.js';
+import { parseUploadDetailed } from '../src/lib/server/parser.js';
+import { inspectContent, assertSafeForAI } from '../src/lib/content-policy.js';
+import { slugify, excerpt } from '../src/lib/wiki-utils.js';
+if (!process.env.DATABASE_URL) throw Error('DATABASE_URL is required');
+const sql = openDatabase();
+const ai = createAI(process.env);
 const core = [
 	[
 		'Wiki Viki:기본 정책',
@@ -26,70 +33,89 @@ const core = [
 	]
 ];
 
-async function seedCore(sql) {
-	return sql.begin(async (tx) => {
-		// This short initialization transaction contains no file or AI work. Table
-		// locks also wait for writers that do not participate in a seed advisory lock,
-		// so an in-flight alias or edit is visible before we check names and routes.
-		await tx`SET LOCAL lock_timeout = '10s'`;
-		await tx`LOCK TABLE documents, redirects, announcements IN SHARE ROW EXCLUSIVE MODE`;
-		let created = 0;
-		for (const [title, content] of core) {
-			const slug = slugify(title);
-			const [doc] = await tx`
-				INSERT INTO documents (slug,title,content,editor_handle)
-				SELECT ${slug},${title},${content},'Operator-A'
-				WHERE NOT EXISTS (SELECT 1 FROM documents WHERE slug=${slug} OR title=${title})
-				AND NOT EXISTS (SELECT 1 FROM redirects WHERE alias_slug=${slug} OR alias_title=${title})
-				ON CONFLICT DO NOTHING RETURNING id`;
-			if (!doc) continue;
-			await tx`INSERT INTO revisions (document_id,content,editor_handle,summary)
-				VALUES (${doc.id},${content},'Operator-A','초기 문서 생성')`;
-			created += 1;
-		}
-		await tx`INSERT INTO announcements (title,body)
-			SELECT 'Wiki Viki에 오신 것을 환영합니다','문서를 작성하기 전에 기본 정책을 확인해 주세요.'
-			WHERE NOT EXISTS (SELECT 1 FROM announcements WHERE title='Wiki Viki에 오신 것을 환영합니다')`;
-		return { created, skipped: core.length - created };
-	});
-}
-
-export async function runSeed({
-	sql,
-	directory,
-	apiKey = '',
-	model = 'gpt-5-mini',
-	logger = console
-}) {
-	const coreStats = await seedCore(sql);
-	logger.log(
-		`기본 문서: 생성 ${coreStats.created}개, 기존 문서·별칭 보존으로 건너뜀 ${coreStats.skipped}개.`
-	);
-	return seedFiles({ sql, directory, apiKey, model, logger });
-}
-
-async function main() {
-	if (!process.env.DATABASE_URL) {
-		console.error('DATABASE_URL이 필요합니다. 먼저 마이그레이션을 실행하세요.');
-		process.exitCode = 1;
-		return;
+try {
+	let created = 0;
+	for (const [title, content] of core) {
+		const result = await sql.begin((tx) =>
+			seedDocument(tx, {
+				title,
+				content,
+				aliases: title.endsWith('기본 정책')
+					? ['Wiki Viki:basic-policy']
+					: title.endsWith('도움말')
+						? ['Wiki Viki:help']
+						: [],
+				field: '일반',
+				sourceName: 'Wiki Viki 이용 안내'
+			})
+		);
+		if (result.created) created++;
 	}
-	const sql = postgres(process.env.DATABASE_URL, { max: 1 });
+	await sql`INSERT INTO announcements(title,body) SELECT 'Wiki Viki에 오신 것을 환영합니다','문서를 작성하기 전에 기본 정책을 확인해 주세요.' WHERE NOT EXISTS(SELECT 1 FROM announcements WHERE title='Wiki Viki에 오신 것을 환영합니다')`;
+	let files = [];
 	try {
-		const stats = await runSeed({
-			sql,
-			apiKey: process.env.OPENAI_API_KEY,
-			model: process.env.OPENAI_MODEL || 'gpt-5-mini'
-		});
-		if (stats.failed) process.exitCode = 1;
-	} finally {
-		await sql.end();
+		files = (await readdir(new URL('../seed-data/', import.meta.url))).filter((name) =>
+			['.docx', '.pdf', '.xlsx', '.pptx'].includes(extname(name).toLowerCase())
+		);
+	} catch {}
+	let drafts = 0,
+		failed = 0;
+	for (const name of files) {
+		try {
+			const bytes = await readFile(new URL(`../seed-data/${name}`, import.meta.url));
+			const fingerprint = createHash('sha256').update(bytes).digest('hex');
+			if (
+				(
+					await sql`SELECT id FROM drafts WHERE governance->>'seedFingerprint'=${fingerprint} LIMIT 1`
+				).length
+			)
+				continue;
+			const parsed = await parseUploadDetailed(new File([bytes], name));
+			if (!parsed.text.trim()) throw Error('empty_source');
+			assertSafeForAI(name, parsed.text);
+			const sourceCheck = await inspectContent([name, parsed.text], ai.semanticGovernance);
+			if (!sourceCheck.passed) throw Error('seed_content_blocked');
+			const structured = await ai.structureDocuments(parsed.text, name);
+			const records = [];
+			for (const item of structured.documents) {
+				const content = item.sections.map((s) => `## ${s.heading}\n\n${s.content}`).join('\n\n');
+				const governance = await inspectContent(
+					[name, item.title, content, item.description, ...item.aliases],
+					structured.mode === 'ai' ? ai.semanticGovernance : null
+				);
+				records.push({
+					...item,
+					content,
+					governance: {
+						...governance,
+						generationMode: structured.mode,
+						seed: true,
+						seedFingerprint: fingerprint
+					}
+				});
+			}
+			await sql.begin(async (tx) => {
+				await tx`SELECT set_config('wv.operator','1',true)`;
+				await tx`SELECT pg_advisory_xact_lock(21470921,2)`;
+				if (
+					(
+						await tx`SELECT id FROM drafts WHERE governance->>'seedFingerprint'=${fingerprint} LIMIT 1`
+					).length
+				)
+					return;
+				for (const item of records) {
+					await tx`INSERT INTO drafts(title,slug,content,source_name,aliases,governance,status,editor_handle,field,description) VALUES(${item.title},${slugify(item.title)},${item.content},${name},${tx.json(item.aliases || [])},${tx.json(item.governance)},${item.governance.passed ? 'review' : 'blocked'},'Operator-A',${item.field || '일반'},${item.description || excerpt(item.content)})`;
+					drafts++;
+				}
+			});
+		} catch (cause) {
+			failed++;
+			console.error('원본 파일 처리 실패:', cause.code || cause.name);
+		}
 	}
-}
-
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-	main().catch(() => {
-		console.error('시드 작업을 완료하지 못했습니다. 데이터베이스와 원본 폴더를 확인해 주세요.');
-		process.exitCode = 1;
-	});
+	console.log(
+		`안내 ${created}개 추가, 초안 ${drafts}개 추가, 파일 ${failed}개 실패. 기존 문서 본문은 변경하지 않았습니다.`
+	);
+} finally {
+	await sql.end();
 }

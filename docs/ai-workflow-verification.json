@@ -1,0 +1,60 @@
+{
+	"measuredAt": "2026-09-21T12:46:29.110Z",
+	"environment": "Local HTTP + remote Neon disposable schema + real OpenAI",
+	"modelRequested": "gpt-5-mini",
+	"uploads": [
+		{
+			"format": "docx",
+			"bytes": 1874,
+			"elapsedMs": 54481,
+			"drafts": 2,
+			"segments": 5,
+			"segmentKinds": ["paragraph"],
+			"aiGenerated": true,
+			"semanticSkipped": false
+		},
+		{
+			"format": "xlsx",
+			"bytes": 2167,
+			"elapsedMs": 60361,
+			"drafts": 3,
+			"segments": 1,
+			"segmentKinds": ["sheet"],
+			"aiGenerated": true,
+			"semanticSkipped": false
+		},
+		{
+			"format": "pptx",
+			"bytes": 2140,
+			"elapsedMs": 64446,
+			"drafts": 3,
+			"segments": 1,
+			"segmentKinds": ["slide"],
+			"aiGenerated": true,
+			"semanticSkipped": false
+		},
+		{
+			"format": "pdf",
+			"bytes": 1064,
+			"elapsedMs": 60380,
+			"drafts": 3,
+			"segments": 1,
+			"segmentKinds": ["page"],
+			"aiGenerated": true,
+			"semanticSkipped": false
+		}
+	],
+	"answer": {
+		"elapsedMs": 28251,
+		"documents": 2,
+		"citations": 2,
+		"allRevisionAnchorsResolved": true
+	},
+	"merge": {
+		"elapsedMs": 86058,
+		"conflicts": 1,
+		"oldContentPreserved": true,
+		"appliedOnce": true
+	},
+	"status": "passed"
+}

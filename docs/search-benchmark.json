@@ -1,0 +1,69 @@
+{
+	"measuredAt": "2026-09-21T10:42:59.602Z",
+	"environment": "local Vite dev + remote Neon, isolated schema; not production, Node v24.19.0",
+	"corpus": {
+		"documents": 1000,
+		"characters": "479634"
+	},
+	"queries": ["RFCC", "CDU", "정비 요청", "산단 스팀", "벤치마크 문서 12", "없는검증문서"],
+	"samples": 60,
+	"firstRequestMs": 2435.95,
+	"p50Ms": 227.4,
+	"p95Ms": 633.82,
+	"maxMs": 2435.95,
+	"timesMs": [
+		2435.95, 208.82, 221.34, 247.33, 223.81, 200.21, 267.62, 217.55, 881.92, 250.93, 226.21, 235.65,
+		357.25, 215.57, 204.12, 633.82, 222.56, 199.21, 235.23, 281.31, 311.45, 311.71, 227.4, 201.61,
+		632.49, 273.89, 203.6, 251.56, 457.17, 199.63, 416.17, 219.54, 202.72, 329.12, 245.81, 662.16,
+		281.83, 224.37, 207.04, 239.85, 221.89, 202.8, 236.64, 208.46, 204.46, 238.35, 225.18, 202.89,
+		240.25, 232.06, 203.65, 253.61, 287.07, 225.06, 245.47, 217.3, 203.66, 265.78, 225.63, 202.68
+	],
+	"explain": [
+		{
+			"Plan": {
+				"Node Type": "Result",
+				"Parallel Aware": false,
+				"Async Capable": false,
+				"Startup Cost": 0,
+				"Total Cost": 0.26,
+				"Plan Rows": 1,
+				"Plan Width": 32,
+				"Actual Startup Time": 38.863,
+				"Actual Total Time": 38.867,
+				"Actual Rows": 1,
+				"Actual Loops": 1,
+				"Disabled": false,
+				"Shared Hit Blocks": 44333,
+				"Shared Read Blocks": 0,
+				"Shared Dirtied Blocks": 0,
+				"Shared Written Blocks": 0,
+				"Local Hit Blocks": 0,
+				"Local Read Blocks": 0,
+				"Local Dirtied Blocks": 0,
+				"Local Written Blocks": 0,
+				"Temp Read Blocks": 0,
+				"Temp Written Blocks": 0
+			},
+			"Planning": {
+				"Shared Hit Blocks": 17,
+				"Shared Read Blocks": 0,
+				"Shared Dirtied Blocks": 0,
+				"Shared Written Blocks": 0,
+				"Local Hit Blocks": 0,
+				"Local Read Blocks": 0,
+				"Local Dirtied Blocks": 0,
+				"Local Written Blocks": 0,
+				"Temp Read Blocks": 0,
+				"Temp Written Blocks": 0
+			},
+			"Planning Time": 0.41,
+			"Triggers": [],
+			"Execution Time": 38.885
+		}
+	],
+	"notes": [
+		"No external AI calls",
+		"30 Korean/alias fixtures plus synthetic filler up to 1,000 documents",
+		"Sequential HTTP API requests, serverless production cold start and user usability unmeasured"
+	]
+}

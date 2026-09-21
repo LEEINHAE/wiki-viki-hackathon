@@ -1,81 +1,53 @@
-import { db } from '$lib/server/db.js';
-import { readLinkSnapshot } from '$lib/server/document-links.js';
+import { searchOptions } from '$lib/search.js';
 import { searchDocuments } from '$lib/server/search.js';
-import { buildKnowledgeGraph, categoryOf, documentSummary } from '$lib/knowledge.js';
-
-function homeBrowse(documents, category) {
-	const counts = new Map();
-	for (const document of documents) {
-		const name = categoryOf(document);
-		counts.set(name, (counts.get(name) || 0) + 1);
-	}
-	const selected = documents.filter(
-		(document) => category === '전체' || categoryOf(document) === category
-	);
-	return {
-		category,
-		categories: [...counts]
-			.map(([name, count]) => ({ name, count }))
-			.sort((a, b) => a.name.localeCompare(b.name, 'ko')),
-		total: selected.length,
-		documents: selected.slice(0, 12).map(documentSummary)
-	};
-}
-
+import { homeSummary, knowledgeGraph } from '$lib/server/discovery.js';
 export async function load({ url }) {
-	const q = (url.searchParams.get('q') || '').trim().slice(0, 200);
-	const category = (url.searchParams.get('category') || '전체').trim().slice(0, 64) || '전체';
-	const view = ['activity', 'map'].includes(url.searchParams.get('view'))
-		? url.searchParams.get('view')
+	const options = searchOptions(url.searchParams);
+	const layout = ['search', 'activity', 'map'].includes(
+		url.searchParams.get('view') || url.searchParams.get('layout')
+	)
+		? url.searchParams.get('view') || url.searchParams.get('layout')
 		: 'search';
+	const browsing = !!(
+		options.q ||
+		url.searchParams.has('browse') ||
+		(layout !== 'map' && (options.field || options.tag || options.state))
+	);
+	const common = { ...options, layout, browsing, center: url.searchParams.get('center') || '' };
+	const started = performance.now();
 	try {
-		const sql = db();
-		const [snapshot, drafts, revisions, announcements, discussions, results] = await Promise.all([
-			readLinkSnapshot({ content: true }),
-			sql`SELECT id,title,source_name,status,created_at FROM drafts WHERE status <> 'published' ORDER BY created_at DESC`,
-			sql`SELECT COUNT(*)::int AS count FROM revisions r JOIN documents d ON d.id=r.document_id WHERE d.deleted_at IS NULL AND r.created_at >= date_trunc('week', NOW() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'`,
-			sql`SELECT title,body,created_at FROM announcements ORDER BY created_at DESC LIMIT 4`,
-			sql`SELECT ds.thread_title,ds.created_at,d.slug,d.title AS document_title FROM discussions ds JOIN documents d ON d.id=ds.document_id WHERE d.deleted_at IS NULL ORDER BY ds.created_at DESC LIMIT 5`,
-			q ? searchDocuments(q) : []
+		const [summary, search, graph] = await Promise.all([
+			homeSummary(),
+			browsing ? searchDocuments(options) : { results: [], facets: [], total: 0 },
+			layout === 'map'
+				? knowledgeGraph({ center: common.center, field: options.field })
+				: { documents: [], edges: [], center: '' }
 		]);
-		const { documents, aliases } = snapshot;
-		const graph = buildKnowledgeGraph(documents, aliases);
 		return {
-			q,
-			view,
-			browse: !q && view === 'search' ? homeBrowse(documents, category) : null,
+			...common,
+			...summary,
+			...search,
+			graph,
 			databaseReady: true,
-			announcements,
-			discussions,
-			results: results.map(documentSummary),
-			changes: documents.slice(0, 12).map(documentSummary),
-			drafts,
-			stats: {
-				documents: documents.length,
-				edits: revisions[0].count,
-				links: graph.linkCount,
-				drafts: drafts.length
-			},
-			hubs: graph.hubs.slice(0, 6),
-			graph: { nodes: graph.nodes, edges: graph.edges },
-			missing: graph.missing
+			elapsed: ((performance.now() - started) / 1000).toFixed(2)
 		};
 	} catch (cause) {
-		console.error('Wiki home data unavailable:', cause.message);
+		console.error('Home load failed:', cause.code || cause.name);
 		return {
-			q,
-			view,
-			browse: { category, categories: [], documents: [], total: null },
-			databaseReady: false,
+			...common,
+			results: [],
+			facets: [],
+			total: 0,
+			changes: [],
+			trending: [],
+			hubs: [],
+			drafts: [],
 			announcements: [],
 			discussions: [],
-			results: [],
-			changes: [],
-			drafts: [],
-			stats: null,
-			hubs: [],
-			graph: { nodes: [], edges: [] },
-			missing: []
+			missing: [],
+			graph: { documents: [], edges: [], center: '' },
+			stats: { documents: 0, edits: 0, links: 0, drafts: 0 },
+			databaseReady: false
 		};
 	}
 }

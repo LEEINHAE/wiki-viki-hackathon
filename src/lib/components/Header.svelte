@@ -1,169 +1,90 @@
 <script>
-	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { afterNavigate } from '$app/navigation';
+	import { onMount } from 'svelte';
 	import SearchBox from './SearchBox.svelte';
-	import Icon from './Icon.svelte';
-	import WikifyButton from './WikifyButton.svelte';
+	import { permits, canAccessRoute } from '$lib/auth-policy.js';
+	let { onwikify } = $props();
+	let menu = $state(false);
 	let dark = $state(false);
-	let mobileMenu, menuToggle, desktopNav, header, focusedNavigation, modalNavigation;
-	const homeView = $derived(
-		page.url.pathname !== '/'
-			? null
-			: page.url.searchParams.get('q')?.trim()
-				? 'search'
-				: ['activity', 'map'].includes(page.url.searchParams.get('view'))
-					? page.url.searchParams.get('view')
-					: 'search'
-	);
-
-	function closeMobileMenu() {
-		if (mobileMenu) mobileMenu.open = false;
-	}
-	afterNavigate(() => {
-		focusedNavigation = null;
-		modalNavigation = null;
-		closeMobileMenu();
-	});
-	function closeMenu(event) {
-		if (event.key === 'Escape' && mobileMenu?.open && mobileMenu.contains(event.target)) {
-			event.preventDefault();
-			closeMobileMenu();
-			menuToggle?.focus();
-		}
-	}
-
+	const canEdit = $derived(page.data.demo || permits(page.data.user?.role, 'editor'));
 	onMount(() => {
 		dark = document.documentElement.dataset.theme === 'dark';
-		try {
-			dark = localStorage.getItem('wiki-theme') === 'dark';
-		} catch {
-			/* Keep the initial theme when storage is unavailable. */
-		}
-		document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-		const media = window.matchMedia('(max-width: 800px)');
-		function desktopLink(href) {
-			const links = [...desktopNav.querySelectorAll('a')];
-			return links.find((link) => link.getAttribute('href') === href) || links[0];
-		}
-		function resizeMenu() {
-			// CSS can move focus to body before the media change event is delivered.
-			const active =
-				document.activeElement === document.body ? focusedNavigation : document.activeElement;
-			if (media.matches && desktopNav?.contains(active)) {
-				menuToggle?.focus();
-			} else if (!media.matches && mobileMenu?.contains(active)) {
-				const href = active?.getAttribute('href');
-				desktopLink(href)?.focus();
-			}
-			closeMobileMenu();
-		}
-		function dismissOutside(event) {
-			const inNavigation = mobileMenu?.contains(event.target) || desktopNav?.contains(event.target);
-			if (event.type === 'focusin') {
-				const dialog = event.target.closest('dialog[open]');
-				if (dialog && focusedNavigation) {
-					modalNavigation = { dialog, launcher: focusedNavigation };
-				}
-				focusedNavigation = inNavigation ? event.target : null;
-			} else if (!inNavigation) focusedNavigation = null;
-			// Keep the visible launcher available for the dialog's native focus return.
-			if (
-				mobileMenu?.open &&
-				!mobileMenu?.contains(event.target) &&
-				!document.querySelector('dialog[open]')
-			) {
-				closeMobileMenu();
-			}
-		}
-		function restoreModalFocus(event) {
-			if (modalNavigation?.dialog !== event.target) return;
-			const { launcher } = modalNavigation;
-			modalNavigation = null;
-			// A breakpoint change can hide the dialog's original return target.
-			if (!launcher.getClientRects().length) {
-				(media.matches ? menuToggle : desktopLink(launcher.getAttribute('href')))?.focus();
-			}
-		}
-		const observer = new ResizeObserver(() => {
-			document.documentElement.style.setProperty(
-				'--header-height',
-				`${header.getBoundingClientRect().height}px`
-			);
-		});
-		observer.observe(header);
-		media.addEventListener('change', resizeMenu);
-		document.addEventListener('focusin', dismissOutside);
-		document.addEventListener('pointerdown', dismissOutside);
-		document.addEventListener('close', restoreModalFocus, true);
-		return () => {
-			observer.disconnect();
-			document.documentElement.style.removeProperty('--header-height');
-			media.removeEventListener('change', resizeMenu);
-			document.removeEventListener('focusin', dismissOutside);
-			document.removeEventListener('pointerdown', dismissOutside);
-			document.removeEventListener('close', restoreModalFocus, true);
-		};
 	});
 	function toggleTheme() {
 		dark = !dark;
 		document.documentElement.dataset.theme = dark ? 'dark' : 'light';
 		try {
 			localStorage.setItem('wiki-theme', dark ? 'dark' : 'light');
-		} catch {
-			/* Storage may be disabled. */
-		}
+		} catch {}
 	}
+	const home = $derived(
+		page.url.pathname === '/' &&
+			!page.url.searchParams.has('q') &&
+			!page.url.searchParams.has('browse')
+	);
 </script>
 
-<svelte:window onkeydown={closeMenu} />
-
-{#snippet links()}
-	<a href="/?view=search#wiki-search" aria-current={homeView === 'search' ? 'page' : undefined}
-		>검색</a
-	>
-	<a href="/?view=map#explore" aria-current={homeView === 'map' ? 'page' : undefined}>문서 탐색</a>
-	<a href="/?view=activity" aria-current={homeView === 'activity' ? 'page' : undefined}>최근 변경</a
-	><a href="/drafts" aria-current={page.url.pathname === '/drafts' ? 'page' : undefined}
-		>초안 검토</a
-	>
-	<a class="nav-create" href="/new" aria-current={page.url.pathname === '/new' ? 'page' : undefined}
-		>새 문서 작성</a
-	>
-	<WikifyButton class="nav-link">AI 위키파이어</WikifyButton>
-	<a href="/trash" aria-current={page.url.pathname === '/trash' ? 'page' : undefined}>휴지통</a>
-	<a href="/links" aria-current={page.url.pathname === '/links' ? 'page' : undefined}>자동 연결</a>
-{/snippet}
-
-<header class="topbar" bind:this={header}>
+<header class="topbar">
 	<div class="nav-wrap">
 		<a class="brand" href="/" aria-label="위키비키 홈"
 			><span class="brand-mark">W</span><span>위키비키</span></a
 		>
-		<nav class="desktop-nav" aria-label="주요 메뉴" bind:this={desktopNav}>
-			{@render links()}
+		<nav class:expanded={menu} aria-label="주요 메뉴">
+			<a href="/?view=search" onclick={() => (menu = false)}>검색</a>
+			<a href="/?browse=1" onclick={() => (menu = false)}>문서 탐색</a>
+			<a href="/recent" onclick={() => (menu = false)}>최근 변경</a>
+			{#if canEdit}
+				<a
+					href="/wikify"
+					onclick={(event) => {
+						event.preventDefault();
+						menu = false;
+						onwikify();
+					}}>AI 위키파이어</a
+				>
+				<a href="/uploads" onclick={() => (menu = false)}>업로드 작업</a>
+				<a href="/drafts" onclick={() => (menu = false)}>초안 검토</a>
+				<a href="/edit/새-문서" onclick={() => (menu = false)}>새 문서</a>
+			{/if}
 		</nav>
-		<div class="header-tools">
-			{#if page.url.pathname !== '/' || page.url.searchParams.has('q')}<SearchBox
-					compact
-					initial={page.url.searchParams.get('q') || ''}
-				/>{/if}
-			<button
-				class="theme-button"
-				onclick={toggleTheme}
-				aria-label={dark ? '라이트 모드로 전환' : '다크 모드로 전환'}
-				title={dark ? '라이트 모드' : '다크 모드'}
-				><Icon name={dark ? 'sun' : 'moon'} size={18} /></button
-			>
-			<div class="editor-badge" title="기본 익명 편집자 표시입니다. 로그인 계정이 아닙니다.">
-				<span>01</span><b>Editor-01</b>
-			</div>
-		</div>
-		<details class="mobile-menu" bind:this={mobileMenu}>
-			<summary class="secondary-button" bind:this={menuToggle}>
-				메뉴 <Icon name="arrow" size={16} />
-			</summary>
-			<nav aria-label="주요 메뉴">{@render links()}</nav>
-		</details>
+		<div class="nav-spacer"></div>
+		{#if !home}<SearchBox compact initial={page.url.searchParams.get('q') || ''} {onwikify} />{/if}
+		<button
+			class="icon-button theme-toggle"
+			onclick={toggleTheme}
+			aria-label={dark ? '라이트 모드로 전환' : '다크 모드로 전환'}>{dark ? '☀' : '◐'}</button
+		>
+		{#if page.data.demo}<span
+				class="identity"
+				title="개발 환경에서는 로그인 없이 사용할 수 있습니다.">개발 모드</span
+			>{/if}
+		{#if page.data.user}<details class="account-menu">
+				<summary>{page.data.user.handle}</summary>
+				<div class="card">
+					<p>
+						{page.data.user.role === 'admin'
+							? '운영'
+							: page.data.user.role === 'reviewer'
+								? '검토'
+								: page.data.user.role === 'editor'
+									? '편집'
+									: '읽기'} 계정
+					</p>
+					<a href="/account">내 계정</a><a href="/library">내 문서</a><a href="/collections"
+						>문서 묶음</a
+					><a href="/notifications">내 알림</a
+					>{#if canAccessRoute(page.data.user.role, '/reviews')}<a href="/reviews">정기 검토</a
+						>{/if}{#if page.data.user.role === 'admin'}<a href="/admin/users">계정 관리</a>{/if}
+					<form action="/logout" method="POST">
+						<button class="secondary-button">로그아웃</button>
+					</form>
+				</div>
+			</details>{:else if !page.data.demo}<a href="/login">로그인</a>{/if}
+		<button
+			class="mobile-menu"
+			onclick={() => (menu = !menu)}
+			aria-expanded={menu}
+			aria-label="메뉴 열기">☰</button
+		>
 	</div>
 </header>

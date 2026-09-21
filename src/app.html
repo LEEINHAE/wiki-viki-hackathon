@@ -7,9 +7,10 @@
 		<script>
 			try {
 				document.documentElement.dataset.theme =
-					localStorage.getItem('wiki-theme') === 'dark' ? 'dark' : 'light';
+					localStorage.getItem('wiki-theme') ||
+					(matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 			} catch {
-				/* Keep the default theme when storage is unavailable. */
+				document.documentElement.dataset.theme = 'light';
 			}
 		</script>
 		%sveltekit.head%

@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ko">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>화면을 열 수 없습니다 — 위키비키</title>
+		<link rel="stylesheet" href="/fonts/fonts.css" />
+		<script>
+			try {
+				document.documentElement.dataset.theme =
+					localStorage.getItem('wiki-theme') ||
+					(matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+			} catch {}
+		</script>
+		<!-- Keep this page independent of the application bundle so it also works
+		     when authentication hooks or the root layout cannot be rendered. -->
+		<style>
+			:root {
+				font-family: 'Figtree', 'IBM Plex Sans KR', system-ui, sans-serif;
+				color-scheme: light;
+				--bg: #f5ead8;
+				--paper: #ffffff;
+				--text: #201e1d;
+				--muted: #696459;
+				--line: #201e1d29;
+				--link: #8c491a;
+			}
+			:root[data-theme='dark'] {
+				color-scheme: dark;
+				--bg: #25251f;
+				--paper: #272829;
+				--text: #f2e9dc;
+				--muted: #b4ab9a;
+				--line: #f2e9dc29;
+				--link: #efb185;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				margin: 0;
+				color: var(--text);
+				background: var(--bg);
+				font-size: 16px;
+				line-height: 1.65;
+			}
+			main {
+				display: grid;
+				place-items: center;
+				min-height: 100dvh;
+				padding: 24px 18px;
+			}
+			section {
+				width: min(100%, 36rem);
+				padding: clamp(24px, 5vw, 40px);
+				border: 1px solid var(--line);
+				border-radius: 12px;
+				background: var(--paper);
+				overflow-wrap: anywhere;
+			}
+			.brand {
+				margin: 0 0 24px;
+				color: var(--link);
+				font-weight: 700;
+			}
+			.status {
+				color: var(--muted);
+				font-size: 14px;
+			}
+			h1 {
+				margin: 8px 0 16px;
+				font-size: clamp(24px, 4vw, 30px);
+				line-height: 1.4;
+				word-break: keep-all;
+			}
+			p {
+				margin: 0 0 20px;
+			}
+			nav {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 12px;
+				margin-top: 28px;
+			}
+			a {
+				display: inline-flex;
+				align-items: center;
+				min-height: 44px;
+				padding: 8px 16px;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				color: var(--link);
+				font-weight: 600;
+				text-decoration: none;
+			}
+			a:hover {
+				text-decoration: underline;
+				text-underline-offset: 3px;
+			}
+			a:focus-visible {
+				outline: 3px solid var(--link);
+				outline-offset: 3px;
+			}
+			.retry {
+				display: none;
+			}
+			[data-status^='5'] .retry {
+				display: inline-flex;
+			}
+		</style>
+	</head>
+	<body data-status="%sveltekit.status%">
+		<main aria-labelledby="error-title">
+			<section>
+				<p class="brand">위키비키</p>
+				<span class="status">오류 %sveltekit.status%</span>
+				<h1 id="error-title">화면을 열 수 없습니다</h1>
+				<p>%sveltekit.error.message%</p>
+				<nav aria-label="다음 작업">
+					<a href="/">홈으로 이동</a>
+					<a class="retry" href="">다시 시도</a>
+				</nav>
+			</section>
+		</main>
+	</body>
+</html>

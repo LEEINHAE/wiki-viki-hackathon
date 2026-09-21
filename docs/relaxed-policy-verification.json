@@ -1,0 +1,62 @@
+{
+	"measuredAt": "2026-09-21T13:32:08.960Z",
+	"environment": "Local development HTTP + real OpenAI + existing isolated preview schema; synthetic data only",
+	"elapsedMs": 40837,
+	"status": "passed",
+	"source": [
+		"합성 개발 검증 자료. 아래 인물과 절차는 실제 개인정보나 업무 자료가 아닙니다.",
+		"대외비 도서 대여 절차: 가상 담당자 홍길동 과장에게 책 대여를 요청합니다. 담당 사번은 TEST-001이며 문의 메일은 policy-test@example.com입니다. 반납 예정일을 장부에 적습니다.",
+		"급여 업무 일정 안내: 가상 총무팀은 매월 일정표를 확인하고 담당자에게 서류 제출 일정을 공지합니다. 실제 급여 금액이나 개인 인사기록은 포함하지 않습니다."
+	],
+	"result": {
+		"mode": "ai",
+		"type": "done",
+		"jobId": 10,
+		"links": 4,
+		"drafts": [
+			{
+				"id": 21,
+				"links": 2,
+				"title": "합성 개발 검증 자료",
+				"status": "review",
+				"description": "해당 문서는 합성(가상) 데이터로 생성된 검증용 자료임을 안내합니다. 아래 인물과 절차는 실제 개인정보나 업무 자료가 아닙니다."
+			},
+			{
+				"id": 22,
+				"links": 1,
+				"title": "대외비 도서 대여 절차",
+				"status": "review",
+				"description": "대외비 도서 대여를 요청하고 장부에 반납 예정일을 기록하는 기본 절차를 설명합니다. 예시 담당자 정보는 합성(가상) 데이터입니다."
+			},
+			{
+				"id": 23,
+				"links": 1,
+				"title": "급여 업무 일정 안내",
+				"status": "review",
+				"description": "가상 총무팀이 매월 일정표를 확인하고 담당자에게 서류 제출 일정을 공지하는 절차를 안내합니다. 실제 급여 금액이나 개인 인사기록은 포함하지 않습니다."
+			}
+		],
+		"semanticSkipped": true
+	},
+	"documents": [
+		{
+			"title": "합성 개발 검증 자료",
+			"status": "review",
+			"policy": "relaxed",
+			"warnings": ["기밀 또는 대외비 자료", "인사 또는 급여 정보"]
+		},
+		{
+			"title": "대외비 도서 대여 절차",
+			"status": "review",
+			"policy": "relaxed",
+			"warnings": ["기밀 또는 대외비 자료", "개인 연락처"]
+		},
+		{
+			"title": "급여 업무 일정 안내",
+			"status": "review",
+			"policy": "relaxed",
+			"warnings": ["기밀 또는 대외비 자료", "인사 또는 급여 정보"]
+		}
+	],
+	"criticalCredentialBlocked": true
+}

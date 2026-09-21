@@ -1,129 +1,160 @@
-import { error, fail, redirect, isHttpError, isRedirect } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
+import { actorHandle } from '$lib/server/auth.js';
+import { error, fail, redirect } from '@sveltejs/kit';
 import { diffLines } from 'diff';
 import { db } from '$lib/server/db.js';
-import { createHash } from 'node:crypto';
-import { getEditableDocument, editableAliases, saveDocument } from '$lib/server/document-write.js';
-import { inspectDocumentContent } from '$lib/server/document-governance.js';
-import { parseMergeHistory } from '$lib/merge-history.js';
+import { getDocument } from '$lib/server/wiki.js';
+import { persistDocument, writeFailure } from '$lib/server/persistence.js';
+import { inspectContent, validHandle } from '$lib/server/governance.js';
+import { semanticGovernance } from '$lib/server/openai.js';
+import { metadataChanges, hasFullState } from '$lib/document-state.js';
+import { permits } from '$lib/auth-policy.js';
 
-const versionOf = (snapshot) => createHash('sha256').update(snapshot).digest('hex');
-const validId = (id) => /^[1-9]\d{0,18}$/.test(id) && BigInt(id) <= 9223372036854775807n;
-const validVersion = (version) => /^[a-f0-9]{64}$/.test(version);
-
-export async function load({ params, url, request }) {
-	const fallback = {
-		document: null,
-		revisions: [],
-		selected: null,
-		changes: [],
-		version: null,
-		slug: params.slug,
-		semanticAvailable: Boolean(env.OPENAI_API_KEY)
-	};
-	try {
-		const result = await getEditableDocument(params.slug);
-		if (!result) {
-			if (request?.method === 'POST') return { ...fallback, missingDocument: true };
-			error(404, '문서를 찾을 수 없습니다.');
-		}
-		const rows = await db()`SELECT r.*,to_jsonb(r)::text AS snapshot FROM revisions r
-			WHERE document_id=${result.document.id} ORDER BY created_at DESC,id DESC`;
-		const revisions = rows.map(({ snapshot, ...revision }) => ({
-			...revision,
-			merge: parseMergeHistory(revision.summary),
-			version: versionOf(snapshot)
-		}));
-		const index = revisions.findIndex((item) => String(item.id) === url.searchParams.get('diff'));
-		return {
-			...fallback,
-			document: result.document,
-			version: result.version,
-			revisions,
-			selected: index < 0 ? null : String(revisions[index].id),
-			changes:
-				index < 0 ? [] : diffLines(revisions[index + 1]?.content || '', revisions[index].content)
-		};
-	} catch (cause) {
-		if (isHttpError(cause)) throw cause;
-		if (request?.method === 'POST') return { ...fallback, databaseError: true };
-		error(503, '문서 이력을 불러오지 못했습니다. 잠시 후 다시 열어 주세요.');
+export async function load({ params, url, locals }) {
+	const result = await getDocument(params.slug, {
+		followMerges: false,
+		includeDeleted: locals.user?.role === 'admin'
+	});
+	if (!result) error(404, '문서를 찾을 수 없습니다.');
+	const sql = db();
+	const id = result.document.id;
+	const page = Math.max(1, Math.min(10000, Number.parseInt(url.searchParams.get('page')) || 1));
+	const [revisions, counts] = await Promise.all([
+		sql`SELECT id,editor_handle,summary,created_at,COALESCE(to_jsonb(r)->'details','{}'::jsonb) AS details FROM wv_visible_revisions r WHERE document_id=${id} ORDER BY created_at DESC,id DESC LIMIT 20 OFFSET ${(page - 1) * 20}`,
+		sql`SELECT count(*) AS count FROM wv_visible_revisions WHERE document_id=${id}`
+	]);
+	const numeric = (key) =>
+		/^\d+$/.test(url.searchParams.get(key) || '') ? url.searchParams.get(key) : null;
+	const selected = numeric('to') || numeric('diff');
+	let from = numeric('from');
+	let changes = [];
+	let metadata = [];
+	let rollback = null;
+	const preview = numeric('restore');
+	if (selected) {
+		const [target] =
+			await sql`SELECT id,content,document_state,created_at::text AS version FROM wv_visible_revisions WHERE document_id=${id} AND id=${selected}::bigint`;
+		if (!target) error(404, '비교할 리비전을 찾을 수 없습니다.');
+		const [previous] = from
+			? await sql`SELECT id,content,document_state FROM wv_visible_revisions WHERE document_id=${id} AND id=${from}::bigint`
+			: await sql`SELECT id,content,document_state FROM wv_visible_revisions WHERE document_id=${id} AND (created_at,id)<(${target.version}::text::timestamptz,${target.id}::bigint) ORDER BY created_at DESC,id DESC LIMIT 1`;
+		if (from && !previous) error(404, '비교할 이전 리비전을 찾을 수 없습니다.');
+		from = previous?.id || null;
+		changes = diffLines(previous?.content || '', target.content);
+		metadata = metadataChanges(previous?.document_state, target.document_state);
 	}
+	if (preview) {
+		const [target] =
+			await sql`SELECT id,content,document_state FROM wv_visible_revisions WHERE document_id=${id} AND id=${preview}::bigint`;
+		if (!target) error(404, '복원할 리비전을 찾을 수 없습니다.');
+		const [current] = await sql`SELECT wv_document_state_v1(${id}::bigint) AS state`;
+		rollback = {
+			id: target.id,
+			changes: diffLines(result.document.content, target.content),
+			metadata: metadataChanges(current.state, target.document_state),
+			full: hasFullState(target.document_state)
+		};
+	}
+	return {
+		document: result.document,
+		revisions,
+		selected,
+		from,
+		changes,
+		metadata,
+		canRollback: permits(locals.user?.role, 'reviewer') || locals.demo,
+		canRestoreState: locals.user?.role === 'admin',
+		rollback,
+		page,
+		total: Number(counts[0].count)
+	};
 }
 export const actions = {
+	restoreState: async ({ request, params, locals }) => {
+		if (locals.user?.role !== 'admin')
+			return fail(403, { message: '전체 상태 복원에는 운영 권한이 필요합니다.' });
+		const values = Object.fromEntries(await request.formData());
+		if (!/^\d+$/.test(String(values.revision)) || values.reviewed !== 'yes')
+			return fail(400, { message: '복원할 리비전과 확인 항목을 선택해 주세요.' });
+		let saved;
+		try {
+			const result = await getDocument(params.slug, { followMerges: false, includeDeleted: true });
+			if (!result) return fail(404, { message: '문서를 찾을 수 없습니다.' });
+			const [revision] =
+				await db()`SELECT content,document_state FROM wv_visible_revisions WHERE id=${String(values.revision)}::bigint AND document_id=${result.document.id}`;
+			if (!revision || !hasFullState(revision.document_state))
+				return fail(409, {
+					message: '이 리비전에는 전체 상태 기록이 없습니다. 본문 되돌리기를 이용해 주세요.'
+				});
+			const s = revision.document_state;
+			const inspection = await inspectContent(
+				[
+					s.title,
+					revision.content,
+					s.description,
+					s.sourceName,
+					...s.aliases.map((a) => a.title),
+					...s.tags
+				],
+				semanticGovernance
+			);
+			if (!inspection.passed)
+				return fail(400, {
+					message: '복원할 내용의 콘텐츠 검사에 실패했습니다. 본문을 직접 수정해 주세요.'
+				});
+			const [row] =
+				await db()`SELECT wv_restore_document_state_v1(${JSON.stringify({ id: result.document.id, version: values.version, revisionId: values.revision, editor: locals.user.handle, inspection, reviewed: values.reviewed })}::jsonb) AS result`;
+			saved = row.result;
+		} catch (cause) {
+			const failure = writeFailure(cause);
+			return fail(failure.status, failure);
+		}
+		redirect(303, `/history/${encodeURIComponent(saved.slug)}?diff=${saved.revisionId}`);
+	},
 	rollback: async ({ request, params }) => {
 		const form = await request.formData();
-		const id = form.get('revision')?.toString() || '';
-		const documentId = form.get('documentId')?.toString() || '';
-		const version = form.get('version')?.toString() || '';
-		const revisionVersion = form.get('revisionVersion')?.toString() || '';
-		const reviewed = { revision: id, documentId, version, revisionVersion };
-		const stale = {
-			...reviewed,
-			refreshRequired: true,
-			message:
-				'문서·별칭 또는 복원할 리비전이 변경되어 되돌리지 않았습니다. 최신 이력을 다시 검토해 주세요.'
-		};
-		if (!validId(id)) return fail(400, { ...stale, message: '되돌릴 리비전을 선택해 주세요.' });
-		if (!validId(documentId) || !validVersion(version) || !validVersion(revisionVersion))
-			return fail(400, {
-				...stale,
-				message: '검토한 버전을 확인할 수 없습니다. 최신 이력을 다시 열어 주세요.'
-			});
+		const id = Number(form.get('revision'));
+		const editor = actorHandle(String(form.get('editor') || ''));
+		if (!validHandle(editor)) return fail(400, { message: '익명 편집자 이름을 확인해 주세요.' });
+		const result = await getDocument(params.slug, { followMerges: false });
+		if (!result) return fail(404);
+		const [revision] =
+			await db()`SELECT content FROM wv_visible_revisions WHERE id=${id} AND document_id=${result.document.id}`;
+		if (!revision) return fail(404, { message: '리비전을 찾을 수 없습니다.' });
+		const aliases =
+			await db()`SELECT alias_title FROM redirects WHERE document_id=${result.document.id}`;
 		try {
-			const result = await getEditableDocument(params.slug);
-			if (!result)
-				return fail(404, { ...stale, message: '문서를 찾을 수 없어 되돌리지 않았습니다.' });
-			if (String(result.document.id) !== documentId || result.version !== version)
-				return fail(409, stale);
-			const [revision] = await db()`SELECT r.content,to_jsonb(r)::text AS snapshot FROM revisions r
-				WHERE id=${id} AND document_id=${documentId}`;
-			if (!revision)
-				return fail(404, {
-					...stale,
-					message: '이 문서의 리비전을 찾을 수 없어 되돌리지 않았습니다.'
-				});
-			if (versionOf(revision.snapshot) !== revisionVersion) return fail(409, stale);
-			const aliases = result.aliases;
-			const summary = `리비전 ${id}(으)로 되돌림`;
-			const governance = await inspectDocumentContent({
-				title: result.document.title,
-				content: revision.content,
-				aliases: aliases.map((row) => row.alias_title),
-				// The revision ID is system metadata, preserved in the saved summary below.
-				summary: '선택한 리비전의 본문으로 되돌림'
-			});
+			const governance = await inspectContent(
+				[
+					result.document.title,
+					revision.content,
+					result.document.description,
+					result.document.source_name,
+					...aliases.map((a) => a.alias_title)
+				],
+				semanticGovernance
+			);
 			if (!governance.passed)
-				return fail(governance.semantic.unavailable ? 503 : 400, {
-					...reviewed,
-					governance,
-					message: governance.semantic.unavailable
-						? 'AI 의미 검사를 완료하지 못해 되돌리지 않았습니다. 잠시 후 다시 시도해 주세요.'
-						: '콘텐츠 보호 검사로 되돌리기가 차단되었습니다. 현재 제목·별칭과 복원할 본문을 확인해 주세요.'
+				return fail(400, {
+					message: '이전 본문의 콘텐츠 검사에 실패했습니다. 본문을 직접 수정해 주세요.'
 				});
-			const saved = await saveDocument({
+			await persistDocument({
+				id: result.document.id,
+				version: String(form.get('version') || ''),
 				title: result.document.title,
 				content: revision.content,
-				editor: 'Operator-A',
-				summary,
-				expected: result,
-				sourceRevision: { id, snapshot: revision.snapshot },
-				requestedSlug: params.slug,
-				aliases: editableAliases(
-					aliases.map((row) => row.alias_title),
-					result.document.slug,
-					aliases
-				)
+				editor,
+				summary: `리비전 ${id}(으)로 되돌림`,
+				slug: result.document.slug,
+				field: result.document.field,
+				description: result.document.description,
+				sourceName: result.document.source_name,
+				aliases: aliases.map((a) => a.alias_title),
+				governance
 			});
-			if (saved.status !== 'saved') return fail(409, stale);
-			redirect(303, `/wiki/${encodeURIComponent(result.document.slug)}`);
 		} catch (cause) {
-			if (isRedirect(cause)) throw cause;
-			return fail(500, {
-				...reviewed,
-				message:
-					'되돌리기 결과를 확인하지 못했습니다. 문서의 현재 상태를 확인한 뒤 다시 시도해 주세요.'
-			});
+			const failure = writeFailure(cause);
+			return fail(failure.status, failure);
 		}
+		redirect(303, `/wiki/${result.document.slug}`);
 	}
 };
