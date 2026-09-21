@@ -1,5 +1,4 @@
 import mammoth from 'mammoth';
-import { PDFParse } from 'pdf-parse';
 import readExcelFile from 'read-excel-file/node';
 import { extractPresentation } from './presentation.js';
 import { uploadFormatMessage } from '../upload.js';
@@ -30,7 +29,12 @@ export async function parseUpload(file) {
 		return result.value.trim();
 	}
 	if (/\.pdf$/i.test(name) || file.type === 'application/pdf') {
-		const parser = new PDFParse({ data: bytes });
+		// Load the Node canvas polyfills before PDF.js, only for PDF uploads.
+		// The explicit worker import also lets Vercel trace its native dependencies.
+		const { CanvasFactory, getData } = await import('pdf-parse/worker');
+		const { PDFParse } = await import('pdf-parse');
+		PDFParse.setWorker(getData());
+		const parser = new PDFParse({ data: bytes, CanvasFactory });
 		try {
 			const result = await parser.getText();
 			return result.text.trim();

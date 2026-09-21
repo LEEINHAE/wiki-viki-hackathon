@@ -3,6 +3,16 @@ import assert from 'node:assert/strict';
 import { parseUpload } from '../src/lib/server/parser.js';
 import { supportsUpload } from '../src/lib/upload.js';
 import { workbookFile, presentationFile } from './fixtures/office.js';
+import { seedPdf } from './fixtures/seed-source.js';
+
+test('PDF loads its Node canvas and worker before extracting text, including subsequent uploads', async () => {
+	for (const text of ['First PDF upload', 'Second PDF upload']) {
+		const extracted = await parseUpload(new File([seedPdf(text)], 'verification.pdf'));
+		assert.ok(extracted.includes(text));
+	}
+	await assert.rejects(parseUpload(new File(['invalid'], 'broken.pdf')));
+	assert.ok((await parseUpload(await workbookFile())).includes('인계 노트'));
+});
 
 test('Excel retains sheet order, blank columns, rich strings, cached formulas and dates', async () => {
 	const text = await parseUpload(await workbookFile());

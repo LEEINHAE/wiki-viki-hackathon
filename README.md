@@ -75,7 +75,12 @@ bun run test
 bun run check
 bun run lint
 bun run build
+bun run test:deployment
 ```
+
+`test:deployment`는 먼저 빌드한 Vercel 함수 전체를 저장소 밖의 임시 폴더로 복사하고 별도 Node 프로세스에서 실제 함수 진입점을 실행합니다. 상위 `node_modules`의 도움 없이 업로드 라우트가 로드되고 DOCX/PDF/XLSX/PPTX 추출이 검사 단계까지 도달하는지 확인합니다. 가상 차단 파일명으로 AI·DB 전송 전에 중단하므로 외부 호출과 저장은 없습니다. PDF의 canvas 의존성을 제거한 장애 환경에서도 Office 업로드가 유지되는지 검사하며 종료 후 복사본을 지웁니다. `WIKIFY_TEST_XLSX`로 실제 XLSX 경로를 지정할 수 있습니다. 배포 런타임과 같은 Node.js 22에서 이 명령을 실행하세요.
+
+PDF 라이브러리는 PDF 업로드일 때만 `pdf-parse/worker`의 Node canvas 폴리필을 먼저 로드하고 내장 worker를 지정합니다. 엑셀 업로드가 PDF 초기화 오류로 함께 중단되는 것을 막으며, Vercel이 worker와 native canvas 의존성도 추적하게 합니다. [pdf-parse의 배포 문제 해결 안내](https://github.com/mehmet-kozan/pdf-parse/blob/main/docs/troubleshooting.md)를 따른 구성입니다. 이 배포 산출물 검사는 운영 Vercel에 실제 배포한 결과와 별개입니다.
 
 마이그레이션·초안·직접 편집·이력 되돌리기·휴지통/복구·토론 등록·시드 콘텐츠 보호 및 데이터 보존의 PostgreSQL 통합 검증은 별도로 활성화합니다. 사용자 자료와 분리된 로컬 DB를 준비하고, 이름이 `wiki_viki_test_`로 시작하는 DB의 연결 정보를 `GOVERNANCE_TEST_DATABASE_URL`에 설정한 뒤 `RUN_GOVERNANCE_DB_TESTS=1 bun run test`를 실행하세요. 테스트는 고유 스키마를 만들고 종료 시 정리합니다. 시드 검증에는 임시 DOCX/PDF와 외부 HTTP를 차단한 별도 Bun 프로세스도 사용합니다. 기본 시드와 데모 시드 보존 검사는 DB trigger로 중간 실패를 일으키고, 독립된 PostgreSQL 연결의 잠금 대기를 확인해 동시 실행을 검증합니다. 두 CLI에서 주소가 다른 제목·별칭의 표시 이름 충돌과 활성/휴지통 소유권·재실행 보존도 확인합니다. 데모 시드는 실제 Bun CLI의 전체 롤백·휴지통 포함 충돌·연결 단절·재시도와 생성/건너뜀 로그도 확인합니다. 프로토타입 적재도 실제 Bun/Node CLI에서 일곱 예시의 본문·출처·별칭 보존, 이름을 바꾼 참조 초안의 재생성 방지, 일반 쓰기와의 경합·중간 실패·연결 종료·안전한 실패 안내를 검증합니다. 플래그가 없으면 이 DB 검증은 생략되며 통과로 계산하지 않습니다. AI 응답은 전송 경계에서 모의 처리하므로 실제 OpenAI 호출 검증과 구분합니다.
 

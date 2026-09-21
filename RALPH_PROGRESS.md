@@ -1,5 +1,17 @@
 # P0 진행 기록
 
+## 현재 재개 작업 — 반복 58 (2026-09-22)
+
+- **W2 배포 수정 구현 완료·운영 검증 대기**: 사용자 Vercel 로그의 `ReferenceError: DOMMatrix is not defined`를 확인했다. `/api/wikify` GET도 500, `/api/answer` GET은 405, 홈은 200으로, 파일·AI 처리 전 업로드 모듈 초기화 실패다. 운영 환경에는 읽기 요청만 보냈다.
+- 실제 재현: 기존 `.vercel/output/functions/![-]/catchall.func`를 저장소 바깥으로 복사하니 `@napi-rs/canvas` 누락과 같은 DOMMatrix 오류가 발생했다. `parser.js`의 정적 PDF import가 Excel에도 실행되고, 동적 require 의존성이 빌드 추적에서 빠진다. 개발 서버의 상위 node_modules가 누락을 가렸으므로 기존 검증의 배포 산출물 공백이다.
+- 변경 전 기본 test **141 통과·DB 23 생략**, check 오류 0·경고 0, lint 통과. Node.js 22.23.2로 독립 복사한 실제 Vercel 함수 진입점을 실행하는 회귀를 추가했으며 변경 전 GET 405 기대가 500으로 실패했다. 증거: `/tmp/wiki-vercel-upload-20260922/`.
+- 이번 완료 단위: PDF만 필요할 때 worker/CanvasFactory를 먼저 불러온 뒤 PDFParse를 초기화하여 Office 경로를 격리하고 PDF 의존성도 빌드에 포함한다. 네 형식의 배포 산출물 검사 및 PDF 의존성 장애 시 Office 업로드 보존을 확인한다. 재배포·운영 업로드는 사용자 요청 없이 수행하지 않는다.
+- 구현: `parser.js`의 정적 PDF import를 제거하고 PDF 분기에서 `pdf-parse/worker` → `pdf-parse` 순서로 동적 로드한다. `CanvasFactory`와 내장 worker 데이터를 명시하여 native 의존성 추적과 PDF 추출을 함께 복구한다. 기존 라이브러리·버전·DB 모델·AI 설정은 바꾸지 않았다. 새 `scripts/verify-vercel-upload.mjs`와 `bun run test:deployment`로 실제 배포 함수의 GET·네 형식 추출·native 모듈 누락 격리를 자동 검증한다.
+- 변경 후 PDF 반복 추출·손상 파일 거부·이후 Excel 추출을 포함한 parser 검사 **5개 통과**, 프로덕션 빌드 통과. 빌드 추적 경고에는 현재 macOS에 설치되지 않은 다른 OS용 canvas 선택 바이너리가 나열된다. 필요한 macOS native 바이너리와 canvas JS가 산출물에 포함됐음을 확인했다. Vercel Linux에서 생성한 산출물은 재배포 후 별도 확인한다.
+- Node.js 22.23.2의 새 배포 검사에서 정상 패키지와 canvas 제거 패키지 **두 경우 모두 통과**했다. 실제 첨부 XLSX를 사용했고, 가상의 차단 파일명으로 추출 후 외부 AI/DB 전에 중단했다. canvas 없는 PDF는 제어된 422를 반환하며 Office 파일은 정상 추출된다. 이는 실제 AI 생성/DB 저장 검증으로 표시하지 않는다. 초기 새 fixture는 Origin 헤더 누락으로 CSRF 403이었고, 실제 브라우저처럼 동일 Origin을 보내도록 수정했다. CSRF 보호는 유지한다.
+- 최종 격리 PostgreSQL 전체 `RUN_GOVERNANCE_DB_TESTS=1 GOVERNANCE_TEST_DATABASE_URL=<격리 로컬 URL> bun run test`: **666 통과·실패 0·생략 0**. check 오류 0·경고 0, lint·프로덕션 빌드·diff 검사 통과. Node.js 22.23.2(실제 첨부 XLSX)와 Node.js 26.7.0(가상 XLSX)의 배포 산출물 검사 모두 정상/의존성 장애 두 경우 통과·외부 호출 0. 기존 실패는 배포 모듈 초기화 오류이며 최종 로컬 검사에 미해결 회귀 없음.
+- UI·DB 스키마·AI 요청은 변경하지 않아 화면/외부 AI 호출은 반복하지 않았다. **다음 작업 하나: 수정 버전을 Vercel에 재배포한 뒤 업로드 경로 GET 405와 첨부 XLSX 업로드를 확인한다.** 운영 배포·운영 DB 변경은 명시적으로 요청받지 않아 수행하지 않았다. 운영 검증 전에는 전체 완료 문자열을 출력하지 않는다. 이전 반복 57의 완료 선언은 당시 로컬·실제 AI 검증 범위이며 이번에 확인한 배포 패키징 결함을 포함하지 않았다.
+
 ## 현재 재개 작업 — 반복 57 (2026-09-22)
 
 - **W2 완료**: 사용자가 실제 실패 XLSX와 오류 화면을 제공하여 재현 자료 대기가 해소됐다. 첨부 파일 자체는 수정하거나 저장소에 복사하지 않았다.

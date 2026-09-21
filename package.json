@@ -8,6 +8,7 @@
 		"build": "vite build",
 		"preview": "vite preview",
 		"test": "node --test --test-concurrency=1 tests/*.test.js",
+		"test:deployment": "node scripts/verify-vercel-upload.mjs",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
 		"migrate": "bun run scripts/migrate.js",
 		"seed": "bun run scripts/seed.js",
