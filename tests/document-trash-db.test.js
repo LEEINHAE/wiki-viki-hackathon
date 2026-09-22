@@ -346,7 +346,21 @@ test(
 						version: selected.version
 					});
 					assert.equal(result.status, 409);
-					assert.deepEqual(await snapshot(), before);
+					const after = await snapshot();
+					const expected = structuredClone(before);
+					const expectedDraft = expected.drafts.find((d) => String(d.id) === String(draft.id));
+					expectedDraft.status = 'blocked';
+					expectedDraft.updated_at = after.drafts.find(
+						(d) => String(d.id) === String(draft.id)
+					).updated_at;
+					expectedDraft.governance = {
+						passed: true,
+						regex: { passed: true, reasons: [] },
+						semantic: { passed: true, reasons: [], skipped: true },
+						fields: [],
+						publication: { code: 'conflict' }
+					};
+					assert.deepEqual(after, expected);
 				}
 			);
 			for (const archived of [false, true]) {

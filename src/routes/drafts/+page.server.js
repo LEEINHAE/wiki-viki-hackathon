@@ -19,7 +19,8 @@ import {
 	batchReviewLimit,
 	batchDeleteLimit,
 	batchReviewReason,
-	reviewListPage
+	reviewListPage,
+	publicationConflictMessage
 } from '$lib/draft-review.js';
 import {
 	proposalMatches,
@@ -466,8 +467,8 @@ async function publishForm(form, batch = false) {
 		if (result.status === 'conflict')
 			return fail(409, {
 				id,
-				message:
-					'같은 제목·주소·별칭을 사용하는 문서가 있습니다. 초안의 제목이나 별칭을 수정한 뒤 다시 저장해 주세요.'
+				refreshRequired: true,
+				message: publicationConflictMessage
 			});
 		return {
 			id,

@@ -207,7 +207,11 @@ try {
 				'보존할 기존 본문'
 			);
 			assert.equal(await p.locator('.review-row').count(), 3);
-			assert.equal(await select(p, '기존용어').isChecked(), true);
+			assert.equal(await select(p, '기존용어').isChecked(), false);
+			assert.equal(
+				(await sql`SELECT status FROM drafts WHERE id=${conflict}`)[0].status,
+				'blocked'
+			);
 			assert.equal(aiCalls, 3);
 			assert.equal(
 				await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
@@ -220,22 +224,45 @@ try {
 				.getByRole('link', { name: /확인 필요/ })
 				.click();
 			await p.waitForURL(/status=blocked/);
+			assert.equal(await p.locator('.review-row').count(), 2);
+			await p.getByRole('heading', { name: '기존용어', exact: true }).waitFor();
+			await shot(p, `attention-${width}-${theme}`);
+			await p
+				.locator(`a[href="/drafts?open=${conflict}"]`)
+				.filter({ hasText: '수정·통합' })
+				.click();
+			await p
+				.getByText(
+					'같은 제목·주소·별칭을 사용하는 문서가 있습니다. 초안의 제목이나 별칭을 수정하거나 기존 문서에 통합해 주세요.',
+					{ exact: true }
+				)
+				.waitFor();
+			await p.getByLabel('문서 제목', { exact: true }).fill('고친용어');
+			await p.getByRole('button', { name: '검토 내용 저장', exact: true }).click();
+			await p.getByText('검토 후 게시할 수 있는 초안입니다.', { exact: true }).waitFor();
+			await p.waitForLoadState('networkidle');
+			assert.equal((await sql`SELECT status FROM drafts WHERE id=${conflict}`)[0].status, 'review');
+			assert.equal(
+				(await sql`SELECT governance FROM drafts WHERE id=${conflict}`)[0].governance.publication,
+				undefined
+			);
+			await p.goto(base + '/drafts?status=blocked', { waitUntil: 'networkidle' });
 			assert.equal(await p.locator('.review-row').count(), 1);
 			await p
 				.getByRole('navigation', { name: '초안 상태 필터' })
 				.getByRole('link', { name: /^전체/ })
 				.click();
 			await p.waitForURL(/status=all/);
-			assert.equal(await select(p, '기존용어').isChecked(), false);
+			assert.equal(await select(p, '고친용어').isChecked(), false);
 			// A changed version is shown as a failed result and never automatically re-approved.
-			await select(p, '기존용어').check();
+			await select(p, '고친용어').check();
 			await sql`UPDATE drafts SET content='다른 검토자의 최신 본문' WHERE id=${conflict}`;
 			await submit(p).click();
 			await p
 				.getByRole('heading', { name: '게시 결과 · 완료 0개 / 확인 필요 1개', exact: true })
 				.waitFor();
 			await p.getByText('다른 검토자의 최신 본문', { exact: true }).waitFor();
-			assert.equal(await select(p, '기존용어').isChecked(), false);
+			assert.equal(await select(p, '고친용어').isChecked(), false);
 			// Existing deep links and individual editing/AI merge remain available.
 			await p.locator(`a[href="/drafts?open=${merge}"]`).filter({ hasText: '수정·통합' }).click();
 			await p.getByLabel('위키 본문', { exact: true }).waitFor();
@@ -251,6 +278,34 @@ try {
 			});
 			await context.close();
 		}
+	// A failed row leaves the currently selected review category immediately.
+	await state.clearDatabase();
+	state.env.OPENAI_API_KEY = '';
+	await seed('분류충돌');
+	await sql`INSERT INTO documents(title,slug,content) VALUES ('분류충돌','분류충돌','기존 본문')`;
+	const filtered = await browser.newPage({ viewport: { width: 360, height: 850 } });
+	await observe(filtered);
+	await filtered.goto(base + '/drafts?status=review', { waitUntil: 'networkidle' });
+	await select(filtered, '분류충돌').check();
+	await submit(filtered).click();
+	await filtered
+		.getByRole('heading', { name: '게시 결과 · 완료 0개 / 확인 필요 1개', exact: true })
+		.waitFor();
+	await filtered.getByText('이 상태의 초안은 없어요.', { exact: true }).waitFor();
+	assert.equal(await filtered.locator('.review-row').count(), 0);
+	await filtered
+		.getByRole('navigation', { name: '초안 상태 필터' })
+		.getByRole('link', { name: '확인 필요 1', exact: true })
+		.click();
+	await filtered.waitForURL(/status=blocked/);
+	await filtered.getByRole('heading', { name: '분류충돌', exact: true }).waitFor();
+	await filtered.reload({ waitUntil: 'networkidle' });
+	assert.equal(await filtered.locator('.review-row').count(), 1);
+	await shot(filtered, 'moved-to-attention');
+	await filtered.close();
+	reports.push({
+		categoryChange: 'review becomes empty; blocked contains the failed draft across reloads'
+	});
 	// Select-all is bounded and does not carry approvals into a different page or filter.
 	await state.clearDatabase();
 	state.env.OPENAI_API_KEY = '';
@@ -319,6 +374,8 @@ try {
 	await state.clearDatabase();
 	await seed('기본폼하나', 'review', {}, '긴 본문을 모두 읽고 검토합니다.\n\n'.repeat(30));
 	await seed('기본폼둘');
+	await seed('기본폼충돌');
+	await sql`INSERT INTO documents(title,slug,content) VALUES ('기본폼충돌','기본폼충돌','보존할 본문')`;
 	const nojs = await browser.newContext({
 		javaScriptEnabled: false,
 		viewport: { width: 360, height: 850 }
@@ -329,11 +386,17 @@ try {
 	assert.equal(await basic.locator('.review-body.collapsed').count(), 0);
 	await select(basic, '기본폼하나').check();
 	await select(basic, '기본폼둘').check();
+	await select(basic, '기본폼충돌').check();
 	await submit(basic).click();
 	await basic
-		.getByRole('heading', { name: '게시 결과 · 완료 2개 / 확인 필요 0개', exact: true })
+		.getByRole('heading', { name: '게시 결과 · 완료 2개 / 확인 필요 1개', exact: true })
 		.waitFor();
-	assert.equal((await sql`SELECT count(*)::int n FROM documents`)[0].n, 2);
+	assert.equal((await sql`SELECT count(*)::int n FROM documents`)[0].n, 3);
+	await basic
+		.getByRole('navigation', { name: '초안 상태 필터' })
+		.getByRole('link', { name: '확인 필요 1', exact: true })
+		.click();
+	await basic.getByRole('heading', { name: '기본폼충돌', exact: true }).waitFor();
 	await nojs.close();
 	// A database outage is an error state, never an empty queue or fabricated counts.
 	const errorPage = await browser.newPage();
@@ -353,7 +416,7 @@ try {
 	assert.deepEqual(outbound, []);
 	reports.push({
 		lostResponse: 'committed once; retry recognized prior publication',
-		noJavaScript: '2 published',
+		noJavaScript: '2 published, conflicting draft moved to attention',
 		databaseFailure: 'explicit error'
 	});
 	await writeFile(

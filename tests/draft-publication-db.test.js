@@ -87,7 +87,7 @@ test(
 					const rows =
 						await sql`SELECT pid FROM pg_stat_activity WHERE application_name=current_setting('application_name')
 					AND state='active' AND wait_event_type='Lock'
-					AND (query LIKE 'LOCK TABLE documents, redirects%' OR query LIKE '%WITH alias_input AS%')`;
+						AND (query LIKE 'LOCK TABLE documents, redirects%' OR query LIKE '%WITH alias_input AS%' OR query LIKE 'SELECT id FROM drafts WHERE%FOR UPDATE')`;
 					if (new Set(rows.map((row) => row.pid)).size === count) return;
 					await delay(20);
 				}
@@ -169,7 +169,7 @@ test(
 				'alias-alias-label'
 			]) {
 				await t.test(
-					`existing ${kind} conflict leaves every existing row and the draft unchanged`,
+					`existing ${kind} conflict preserves source data and moves the draft to attention`,
 					async () => {
 						await reset();
 						const draft = await seed();
@@ -186,7 +186,19 @@ test(
 					VALUES (${kind === 'route-alias' ? draft.slug : kind === 'alias-alias' ? '점검-안내' : 'legacy-alias'},${kind === 'title-alias-label' ? draft.title : kind === 'alias-alias-label' ? '점검 안내' : '기존 별칭'},${doc.id})`;
 						const before = await snapshot();
 						assert.equal((await post(await fields(draft.id))).status, 409);
-						assert.deepEqual(await snapshot(), before);
+						const after = await snapshot();
+						const expected = structuredClone(before);
+						expected.drafts[0].status = 'blocked';
+						expected.drafts[0].updated_at = after.drafts[0].updated_at;
+						expected.drafts[0].governance = {
+							...before.drafts[0].governance,
+							passed: true,
+							regex: { passed: true, reasons: [] },
+							semantic: { passed: true, reasons: [], skipped: true },
+							fields: [],
+							publication: { code: 'conflict' }
+						};
+						assert.deepEqual(after, expected);
 					}
 				);
 			}
@@ -207,7 +219,7 @@ test(
 							);
 							try {
 								const result = await post(input);
-								assert.equal(result.status, table === 'drafts' && behavior === 'skip' ? 409 : 503);
+								assert.equal(result.status, 503);
 								assert.doesNotMatch(
 									JSON.stringify(result),
 									/test-private|division by zero|postgres/i
@@ -223,6 +235,90 @@ test(
 					);
 				}
 			}
+			for (const behavior of ['raise', 'skip']) {
+				await t.test(
+					`failed attention-state ${behavior} rolls back and retry records the conflict`,
+					async () => {
+						await reset();
+						const draft = await seed();
+						await sql`INSERT INTO documents(title,slug,content) VALUES (${draft.title},'existing','보존 본문')`;
+						const input = await fields(draft.id),
+							before = await snapshot();
+						await sql.unsafe(
+							`CREATE FUNCTION fail_attention() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.status='blocked' THEN ${behavior === 'raise' ? "RAISE EXCEPTION 'private-attention-error';" : 'RETURN NULL;'} END IF; RETURN NEW; END $$`
+						);
+						await sql`CREATE TRIGGER fail_attention BEFORE UPDATE ON drafts FOR EACH ROW EXECUTE FUNCTION fail_attention()`;
+						try {
+							const result = await post(input);
+							assert.equal(result.status, 503);
+							assert.deepEqual(await snapshot(), before);
+							assert.doesNotMatch(
+								JSON.stringify(result),
+								/private-attention-error|division by zero/
+							);
+						} finally {
+							await sql`DROP TRIGGER fail_attention ON drafts`;
+							await sql`DROP FUNCTION fail_attention()`;
+						}
+						assert.equal((await post(input)).status, 409);
+						assert.equal((await snapshot()).drafts[0].status, 'blocked');
+					}
+				);
+			}
+			await t.test('a conflicting stale request cannot reclassify a concurrent edit', async () => {
+				await reset();
+				const draft = await seed();
+				await sql`INSERT INTO documents(title,slug,content) VALUES (${draft.title},'existing','보존 본문')`;
+				const [result] = await overlap(
+					[await fields(draft.id)],
+					(tx) => tx`UPDATE drafts SET content='새 검토 본문' WHERE id=${draft.id}`
+				);
+				assert.equal(result.status, 409);
+				const current = (await snapshot()).drafts[0];
+				assert.equal(current.status, 'review');
+				assert.equal(current.content, '새 검토 본문');
+				assert.equal(current.governance.publication, undefined);
+			});
+			await t.test(
+				'saving the corrected draft clears its publication reason and permits publication',
+				async () => {
+					await reset();
+					const draft = await seed();
+					await sql`INSERT INTO documents(title,slug,content) VALUES (${draft.title},'existing','보존 본문')`;
+					assert.equal((await post(await fields(draft.id))).status, 409);
+					assert.equal(
+						(await load({ url: new URL('http://localhost/drafts?status=blocked') })).reviewList
+							.total,
+						1
+					);
+					const input = new FormData();
+					for (const [key, value] of Object.entries({
+						...(await fields(draft.id)),
+						title: '고친 점검',
+						content: draft.content,
+						aliases: draft.aliases.join('\n'),
+						editor: 'Editor-01'
+					}))
+						input.set(key, String(value));
+					await assert.rejects(
+						actions.update({
+							request: new Request('http://localhost/drafts', { method: 'POST', body: input })
+						}),
+						{ status: 303 }
+					);
+					const updated = (await snapshot()).drafts[0];
+					assert.equal(updated.status, 'review');
+					assert.equal(updated.governance.publication, undefined);
+					assert.deepEqual(updated.governance.seed, { source: 'test' });
+					assert.equal(
+						(await load({ url: new URL('http://localhost/drafts?status=blocked') })).reviewList
+							.total,
+						0
+					);
+					assert.equal((await post(await fields(draft.id))).status, 303);
+					assert.equal((await snapshot()).drafts[0].governance.publication, undefined);
+				}
+			);
 			await t.test(
 				'missing, malformed and stale review versions stop before external inspection',
 				async (st) => {
@@ -323,7 +419,7 @@ test(
 						const after = await snapshot();
 						assert.equal(after.documents.length, 1);
 						assert.equal(after.revisions.length, 1);
-						assert.deepEqual(after.drafts.map((d) => d.status).sort(), ['published', 'review']);
+						assert.deepEqual(after.drafts.map((d) => d.status).sort(), ['blocked', 'published']);
 					}
 				);
 			}
@@ -356,7 +452,7 @@ test(
 					const after = await snapshot();
 					assert.equal(after.documents.length, 1);
 					assert.equal(after.redirects[0].document_id, Number(doc.id));
-					assert.equal(after.drafts[0].status, 'review');
+					assert.equal(after.drafts[0].status, 'blocked');
 				}
 			);
 			await t.test(
@@ -368,7 +464,8 @@ test(
 						await sql`SELECT d.*, (to_jsonb(d)-'id')::text AS snapshot FROM drafts d WHERE id=${seeded.id}`;
 					const fetch = st.mock.method(globalThis, 'fetch', async (_url, options) => {
 						const batch = JSON.parse(options.body);
-						assert.equal(batch.queries.length, 3);
+						assert.equal(batch.queries.length, 4);
+						assert.match(batch.queries[2].query, /FOR UPDATE/);
 						assert.match(batch.queries[1].query, /LOCK TABLE documents, redirects/);
 						assert.equal(
 							new Headers(options.headers).get('Neon-Batch-Isolation-Level'),

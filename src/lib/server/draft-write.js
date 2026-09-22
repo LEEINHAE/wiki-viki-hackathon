@@ -49,6 +49,7 @@ export async function deleteDraftBatch(sql, drafts) {
 export async function changeDraft(sql, draft, values = null, governance = null) {
 	const savedGovernance = { ...draft.governance, ...governance };
 	delete savedGovernance.merge;
+	delete savedGovernance.publication;
 	const results = await sql.transaction(
 		(tx) => [
 			tx`SET LOCAL lock_timeout = '10s'`,

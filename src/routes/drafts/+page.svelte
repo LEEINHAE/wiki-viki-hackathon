@@ -8,6 +8,7 @@
 	import MergeReview from '$lib/components/MergeReview.svelte';
 	import EditRecovery from '$lib/components/EditRecovery.svelte';
 	import DraftReviewList from '$lib/components/DraftReviewList.svelte';
+	import { publicationReviewReason } from '$lib/draft-review.js';
 	import WikiEditor from '$lib/components/WikiEditor.svelte';
 	import {
 		draftValues,
@@ -284,6 +285,9 @@
 					<p class="small">
 						저장된 내용의 검사 결과입니다. 필요한 부분을 수정한 뒤 다시 저장해 주세요.
 					</p>
+					{#if publicationReviewReason(governance)}<p class="small">
+							{publicationReviewReason(governance)}
+						</p>{/if}
 					{#if governance?.semantic?.skipped}<p class="small">
 							AI 의미 기반 검사는 실행되지 않았습니다. 내용을 직접 확인해 주세요.
 						</p>{/if}

@@ -231,7 +231,14 @@ test(
 						(await sql`SELECT * FROM documents WHERE id=${existing.id}`)[0],
 						existing
 					);
-					assert.equal((await sql`SELECT status FROM drafts WHERE id=${a}`)[0].status, 'review');
+					assert.equal((await sql`SELECT status FROM drafts WHERE id=${a}`)[0].status, 'blocked');
+					const attention = await list('?status=blocked');
+					assert.deepEqual(
+						attention.reviewList.items.map((d) => String(d.id)),
+						[a]
+					);
+					assert.equal(attention.reviewList.items[0].governance.publication.code, 'conflict');
+					assert.equal((await list('?status=review')).reviewList.total, 0);
 					assert.deepEqual(
 						(await post(selection)).results.map((r) => r.outcome),
 						['failed', 'alreadyPublished']
