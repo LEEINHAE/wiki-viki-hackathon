@@ -9,6 +9,7 @@
 	let results = $state([]);
 	let loading = $state(false);
 	let selected = $state(-1);
+	let searchBox;
 	const uid = $props.id();
 	$effect(() => {
 		query = initial;
@@ -67,11 +68,20 @@
 	}
 </script>
 
+<svelte:window
+	onpointerdown={(event) => {
+		if (!searchBox?.contains(event.target)) focused = false;
+	}}
+/>
+
 <div
+	bind:this={searchBox}
 	class:compact
 	class="search-box"
 	onfocusout={(event) => {
-		if (!event.currentTarget.contains(event.relatedTarget)) focused = false;
+		// Mobile taps can blur the input without focusing the suggestion link.
+		// Keep it mounted until click; outside taps are handled by pointerdown.
+		if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) focused = false;
 	}}
 >
 	<form method="GET" action="/" role="search" onsubmit={submit}>
